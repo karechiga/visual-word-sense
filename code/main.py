@@ -12,18 +12,51 @@ import glob
 import json
 import re
 from sklearn.model_selection import train_test_split
+import torchvision.models as models
+import torch
+import embeddings as emb
 
-def createEmbeddingFile(data_dir):
-    vocab = dict()
-    with open(data_dir + '/embeddings/glove.6B.50d.txt','rt', encoding="utf8") as fi:
-        full_content = fi.read().strip().split('\n')
-    for i in range(len(full_content)):
-        i_word = full_content[i].split(' ')[0]
-        i_embeddings = [float(val) for val in full_content[i].split(' ')[1:]]
-        vocab[i_word] = i_embeddings
-    with open(data_dir + "/embeddings/vocab.json", "w") as outfile:
-        outfile.write(json.dumps(vocab, indent=4))
-    return
+class Model(torch.nn.Module):
+
+    def __init__(self, data_dir):
+        super(Model, self).__init__()
+        self.w_embeddings = emb.wordEmbeddingLayer(data_dir)
+        self.linear1 = torch.nn.Linear(50, 200)
+        self.linear2 = torch.nn.Linear(200, 10)
+        self.relu = torch.nn.ReLU()
+        self.tanh = torch.nn.Tanh()
+        self.softmax = torch.nn.Softmax(dim=1)
+        self.conv = torch.nn.Conv2d(5,5,2)
+        self.pooling = torch.nn.MaxPool2d(2)
+        
+    def image_sequential(self, images):
+        # Returns outputs of NNs with input of multiple images
+        seqs = []
+        for img in images:
+            sequence = torch.nn.Sequential()
+            seqs.append(sequence)
+        return seqs
+    def word_sequential(self, words):
+        # Returns the output of a NN with an input of two words
+        x = self.w_embeddings(words)
+        x = self.linear1(x)
+        x = self.tanh(x)
+        return x
+    def out_sequence(self, combined):
+        return combined
+    def forward(self, words, images):
+        # Networks to be used for the images of the dataset
+        i_seqs = self.image_sequential(images)
+        # Network to be used for the words of the dataset
+        w_seq = self.word_sequential(words)
+        out_tensor = []
+        for seq in i_seqs:
+            combined = torch.cat((seq.view(seq.size(0), -1),
+                            w_seq.view(w_seq.size(0), -1)), dim=1)
+            out_tensor.append(combined)
+        out = self.softmax(out_tensor)
+        return out
+
 
 def readXData(data_dir):
     rows = []
@@ -40,18 +73,20 @@ def readYData(data_dir):
         data = fi.read().split('\n')
     return data
 
-def train(model_dir, data_dir, epochs=10, batch_size=32, learning_rate = 0.1):
+def tokenize(words, data_dir):
+    # takes in a list of words and returns a list of their corresponding tokens.
+    tokens = emb.getTokenizedVocab(data_dir)
+    out = np.zeros(shape=(len(words), len(words[0])))
+    for i in range(len(words)):
+        for j, word in enumerate(words[i]):
+            try:
+                out[i,j] = tokens[word]
+            except:
+                out[i,j] = 0    # token is zero for unknown tokens
+    return out
+
+def preprocessData(data_dir):
     # Read the training data from "data_dir"
-    # Create a dictionary of images
-    imgs = []
-    img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
-    for img in os.listdir(img_path):
-        imgs.append(img)
-        # imgs[img] = cv.imread(img_path + img)
-    # Create a json dictionary of pretrained word embeddings (if it doesn't already exist)
-    if not os.path.exists(data_dir + "/embeddings/vocab.json"):
-        createEmbeddingFile(data_dir)
-    # to load the json file: json.load(open(data_dir + "/embeddings/vocab.json",'r'))
     # Reading the text data
     X = readXData(glob.glob(data_dir + '/*train*/*data*')[0])
     y = readYData(glob.glob(data_dir + '/*train*/*gold*')[0])
@@ -60,7 +95,25 @@ def train(model_dir, data_dir, epochs=10, batch_size=32, learning_rate = 0.1):
                                    random_state=162,
                                    test_size=0.2,
                                    shuffle=True)
-    x_train
+    # for development purposes, cut the number of samples to 100
+    x_train = x_train[:100]
+    x_dev = x_dev[:100]
+    y_train = y_train[:100]
+    y_dev = y_dev[:100]
+    ###########################################################
+    return x_train, x_dev, y_train, y_dev
+
+def train(model_dir, data_dir, epochs=10, batch_size=32, learning_rate = 0.1):
+    """
+    Train the model on the given training dataset located at "data_dir".
+    """
+    x_train, x_dev, y_train, y_dev = preprocessData(data_dir)
+    x_train_w = torch.tensor(tokenize([x[0:2] for x in x_train], data_dir)).to(torch.int64)
+    x_train_i = [x[2:] for x in x_train]
+    x_dev_w = torch.tensor(tokenize([x[0:2] for x in x_dev], data_dir)).to(torch.int64)
+    x_dev_i = [x[2:] for x in x_dev]
+    model = Model(data_dir)
+    model.forward(x_train_w, x_train_i)
     return
 
 
