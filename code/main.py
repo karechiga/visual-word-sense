@@ -15,41 +15,53 @@ from sklearn.model_selection import train_test_split
 import torchvision.models as models
 import torch
 import embeddings as emb
+from PIL import Image
 
 class Model(torch.nn.Module):
 
     def __init__(self, data_dir):
         super(Model, self).__init__()
+        self.img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
         self.w_embeddings = emb.wordEmbeddingLayer(data_dir)
+        i_weights = models.ResNet50_Weights.IMAGENET1K_V2
+        self.i_pretrained = models.resnet50(weights=i_weights)
+        self.i_pretrained.train()
+        self.i_preprocess = i_weights.transforms()
         self.linear1 = torch.nn.Linear(50, 200)
-        self.linear2 = torch.nn.Linear(200, 10)
+        self.linear2 = torch.nn.Linear(200, 1000)
         self.relu = torch.nn.ReLU()
         self.tanh = torch.nn.Tanh()
         self.softmax = torch.nn.Softmax(dim=1)
         self.conv = torch.nn.Conv2d(5,5,2)
         self.pooling = torch.nn.MaxPool2d(2)
         
-    def image_sequential(self, images):
+    def image_model(self, images):
         # Returns outputs of NNs with input of multiple images
-        seqs = []
-        for img in images:
-            sequence = torch.nn.Sequential()
-            seqs.append(sequence)
-        return seqs
-    def word_sequential(self, words):
+        samples = []
+        for row in images:
+            seqs = []
+            for i in row:
+                img = Image.open(self.img_path + i).convert('RGB')
+                batch = self.i_preprocess(img).unsqueeze(0)
+                x = self.i_pretrained(batch)
+                seqs.append(x)
+            samples.append(torch.stack(seqs))
+        return torch.stack(samples)
+    def word_model(self, words):
         # Returns the output of a NN with an input of two words
         x = self.w_embeddings(words)
         x = self.linear1(x)
         x = self.tanh(x)
+        x = self.linear2(x)
+        x = self.tanh(x)
         return x
-    def out_sequence(self, combined):
-        return combined
     def forward(self, words, images):
         # Networks to be used for the images of the dataset
-        i_seqs = self.image_sequential(images)
+        i_seqs = self.image_model(images)
         # Network to be used for the words of the dataset
-        w_seq = self.word_sequential(words)
+        w_seq = self.word_model(words)
         out_tensor = []
+        # Combining the word and image tensors
         for seq in i_seqs:
             combined = torch.cat((seq.view(seq.size(0), -1),
                             w_seq.view(w_seq.size(0), -1)), dim=1)
@@ -96,10 +108,10 @@ def preprocessData(data_dir):
                                    test_size=0.2,
                                    shuffle=True)
     # for development purposes, cut the number of samples to 100
-    x_train = x_train[:100]
-    x_dev = x_dev[:100]
-    y_train = y_train[:100]
-    y_dev = y_dev[:100]
+    x_train = x_train[:15]
+    x_dev = x_dev[:15]
+    y_train = y_train[:15]
+    y_dev = y_dev[:15]
     ###########################################################
     return x_train, x_dev, y_train, y_dev
 
