@@ -16,6 +16,8 @@ import torchvision.models as models
 import torch
 import embeddings as emb
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
+import datetime
 
 class Model(torch.nn.Module):
 
@@ -32,8 +34,8 @@ class Model(torch.nn.Module):
         self.relu = torch.nn.ReLU()
         self.tanh = torch.nn.Tanh()
         self.softmax = torch.nn.Softmax(dim=1)
-        self.conv = torch.nn.Conv2d(5,5,2)
-        self.pooling = torch.nn.MaxPool2d(2)
+        # self.conv = torch.nn.Conv2d(5,5,2)
+        # self.pooling = torch.nn.MaxPool2d(2)
         
     def image_model(self, images):
         # Returns outputs of NNs with input of multiple images
@@ -60,13 +62,18 @@ class Model(torch.nn.Module):
         i_seqs = self.image_model(images)
         # Network to be used for the words of the dataset
         w_seq = self.word_model(words)
-        out_tensor = []
         # Combining the word and image tensors
-        for seq in i_seqs:
-            combined = torch.cat((seq.view(seq.size(0), -1),
-                            w_seq.view(w_seq.size(0), -1)), dim=1)
-            out_tensor.append(combined)
-        out = self.softmax(out_tensor)
+        out_tensor = []
+        for i, sample in enumerate(i_seqs):
+            samps = []
+            for img in sample:
+                combined = torch.cat((img, w_seq[i]))
+                samps.append(combined)
+            out_tensor.append(torch.stack(samps).flatten())
+        linear = torch.nn.Linear(out_tensor[0].size(0), len(images[0]))
+        out = linear(torch.stack(out_tensor))
+        out = self.tanh(out)
+        out = self.softmax(out)
         return out
 
 
@@ -76,6 +83,8 @@ def readXData(data_dir):
         data = fi.read().split('\n')
     for i, r in enumerate(data):
         row = re.split('\t| ', r)
+        if len(row) < 10:
+            continue
         row.pop(0)
         rows.append(row)
     return rows
@@ -83,10 +92,10 @@ def readXData(data_dir):
 def readYData(data_dir):
     with open(data_dir,'rt', encoding="utf8") as fi:
         data = fi.read().split('\n')
-    return data
+    return data[0:-1]
 
 def tokenize(words, data_dir):
-    # takes in a list of words and returns a list of their corresponding tokens.
+    # takes in a 2D list of words and returns a 2D list of their corresponding tokens.
     tokens = emb.getTokenizedVocab(data_dir)
     out = np.zeros(shape=(len(words), len(words[0])))
     for i in range(len(words)):
@@ -97,10 +106,24 @@ def tokenize(words, data_dir):
                 out[i,j] = 0    # token is zero for unknown tokens
     return out
 
+def untokenize(tokens, data_dir):
+    vocab = emb.getTokenizedVocab(data_dir)
+    key_list = list(vocab.keys())
+    val_list = list(vocab.values())
+    key_list[val_list.index(100)]
+    out = [[''] * len(tokens[0])] * len(tokens)
+    for i in range(len(tokens)):
+        for j, token in enumerate(tokens[i]):
+            out[i][j] = key_list[val_list.index(eval(token))]
+    return out
+
 def preprocessData(data_dir):
     # Read the training data from "data_dir"
     # Reading the text data
     X = readXData(glob.glob(data_dir + '/*train*/*data*')[0])
+    tokens = tokenize([t[0:2] for t in X], data_dir)
+    for i, row in enumerate(X):
+        X[i][0:2] = tokens[i]
     y = readYData(glob.glob(data_dir + '/*train*/*gold*')[0])
     # split the rows into training and dev data randomly
     x_train, x_dev, y_train, y_dev = train_test_split(X,y,
@@ -108,24 +131,99 @@ def preprocessData(data_dir):
                                    test_size=0.2,
                                    shuffle=True)
     # for development purposes, cut the number of samples to 100
-    x_train = x_train[:15]
-    x_dev = x_dev[:15]
-    y_train = y_train[:15]
-    y_dev = y_dev[:15]
+    # x_train = x_train[:15]
+    # x_dev = x_dev[:15]
+    # y_train = y_train[:15]
+    # y_dev = y_dev[:15]
     ###########################################################
-    return x_train, x_dev, y_train, y_dev
+    return np.vstack((np.array(x_train).T,np.array(y_train))).T, np.vstack((np.array(x_dev).T,np.array(y_dev))).T
 
-def train(model_dir, data_dir, epochs=10, batch_size=32, learning_rate = 0.1):
+def epoch(batches, model, loss_fnc, optimizer):
+    running_loss = 0.
+
+    for i, data in enumerate(batches):
+        # Every data instance is an input + label pair
+        words, images, labels = data
+
+        # Zero your gradients for every batch!
+        optimizer.zero_grad()
+
+        # Make predictions for this batch
+        outputs = model.forward(words, images)
+        # predictions = torch.argmax(outputs, dim=1)
+        actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))])
+        # argmax function on the outputs
+        # Compute the loss and its gradients
+        loss = loss_fnc(outputs, actual.type(torch.LongTensor))
+        loss.backward()
+
+        # Adjust learning weights
+        optimizer.step()
+
+        # Gather data and report
+        running_loss += loss.item()
+
+    return running_loss / len(batches)
+
+def getBatches(data, batch_size):
+    batches = [] # the training data split into batches
+    np.random.shuffle(data)
+    # untokenize([x[0:2] for x in data], '../data')
+    for i in range(0, len(data), batch_size):
+        batch = []
+        # Words input
+        batch.append(torch.tensor([[eval(x[0]), eval(x[1])] for x in data[i:i+batch_size]]).to(torch.int64))
+        # Images input
+        batch.append([x[2:-1] for x in data[i:i+batch_size]])
+        # output
+        batch.append([x[-1] for x in data[i:i+batch_size]])
+        batches.append(batch)
+    return batches
+
+def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
     """
     Train the model on the given training dataset located at "data_dir".
     """
-    x_train, x_dev, y_train, y_dev = preprocessData(data_dir)
-    x_train_w = torch.tensor(tokenize([x[0:2] for x in x_train], data_dir)).to(torch.int64)
-    x_train_i = [x[2:] for x in x_train]
-    x_dev_w = torch.tensor(tokenize([x[0:2] for x in x_dev], data_dir)).to(torch.int64)
-    x_dev_i = [x[2:] for x in x_dev]
+    train_data, dev_data = preprocessData(data_dir)
     model = Model(data_dir)
-    model.forward(x_train_w, x_train_i)
+    loss_fnc = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    best_vloss = 1_000_000.
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    for e in range(epochs):
+        print('EPOCH {}:'.format(e + 1))
+        batches = getBatches(train_data, batch_size)
+        vbatches = getBatches(dev_data, batch_size) # validation data split into batches
+        # Make sure gradient tracking is on, and do a pass over the data
+        model.train(True)
+        avg_loss = epoch(batches, model, loss_fnc, optimizer)
+
+        # We don't need gradients on to do reporting
+        model.train(False)
+
+        running_vloss = 0.0
+        for i, vdata in enumerate(vbatches):
+            vwords, vimages, vlabels = vdata
+            voutputs = model(vwords, vimages)
+            vloss = loss_fnc(voutputs, vlabels)
+            running_vloss += vloss
+
+        avg_vloss = running_vloss / (i + 1)
+        print('LOSS train {} valid {}'.format(avg_loss, avg_vloss))
+
+        # Log the running loss averaged per batch
+        # for both training and validation
+        # writer.add_scalars('Training vs. Validation Loss',
+        #                 { 'Training' : avg_loss, 'Validation' : avg_vloss },
+        #                 epoch_number + 1)
+        # writer.flush()
+
+        # Track best performance, and save the model's state
+        if avg_vloss < best_vloss:
+            best_vloss = avg_vloss
+            model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
+            torch.save(model.state_dict(), model_path)
     return
 
 
@@ -142,10 +240,9 @@ if __name__ == "__main__":
     train_parser.set_defaults(func=train)
     train_parser.add_argument("model_dir")
     train_parser.add_argument("data_dir")
-    data_dir = '../data/train'
     train_parser.add_argument("--epochs", type=int, default=10)
-    train_parser.add_argument("--batch-size", type=int, default=32)
-    train_parser.add_argument("--learning-rate", type=float, default=0.1)
+    train_parser.add_argument("--batch-size", type=int, default=10)
+    train_parser.add_argument("--learning-rate", type=float, default=0.01)
     predict_parser = subparsers.add_parser("predict")
     predict_parser.set_defaults(func=predict)
     predict_parser.add_argument("model_dir")
