@@ -5,11 +5,8 @@
 """
 
 import argparse
-import os
 import numpy as np
-import cv2 as cv
 import glob
-import json
 import re
 from sklearn.model_selection import train_test_split
 import torchvision.models as models
@@ -19,11 +16,14 @@ from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 import datetime
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if torch.cuda.is_available():
+    print("USING GPU")
 class Model(torch.nn.Module):
 
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, img_path):
         super(Model, self).__init__()
-        self.img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
+        self.img_path = img_path
         self.w_embeddings = emb.wordEmbeddingLayer(data_dir)
         i_weights = models.ResNet50_Weights.IMAGENET1K_V2
         self.i_pretrained = models.resnet50(weights=i_weights)
@@ -44,18 +44,26 @@ class Model(torch.nn.Module):
             seqs = []
             for i in row:
                 img = Image.open(self.img_path + i).convert('RGB')
-                batch = self.i_preprocess(img).unsqueeze(0)
-                x = self.i_pretrained(batch)
+                batch = self.i_preprocess(img).unsqueeze(0).to(device)
+                # if batch.is_cuda:
+                #     print("'batch' using a GPU")
+                # else:
+                #     print("'batch' uses CPU")
+                x = self.i_pretrained(batch).to(device)
                 seqs.append(x)
             samples.append(torch.stack(seqs))
-        return torch.stack(samples)
+        return torch.stack(samples).to(device)
     def word_model(self, words):
         # Returns the output of a NN with an input of two words
-        x = self.w_embeddings(words)
+        x = self.w_embeddings(words.to(device))
         x = self.linear1(x)
         x = self.tanh(x)
         x = self.linear2(x)
         x = self.tanh(x)
+        # if x.is_cuda:
+        #     print("'x' using a GPU")
+        # else:
+        #     print("'x' uses CPU")
         return x
     def forward(self, words, images):
         # Networks to be used for the images of the dataset
@@ -68,11 +76,14 @@ class Model(torch.nn.Module):
             samps = []
             for img in sample:
                 combined = torch.cat((img, w_seq[i]))
-                samps.append(combined)
-            out_tensor.append(torch.stack(samps).flatten())
-        linear = torch.nn.Linear(out_tensor[0].size(0), len(images[0]))
-        out = linear(torch.stack(out_tensor))
-        out = self.tanh(out)
+                # if combined.is_cuda:
+                #     print("'combined' using a GPU")
+                # else:
+                #     print("'combined' uses CPU")
+                samps.append(combined.flatten())
+            out_tensor.append(torch.stack(samps))
+        linear = torch.nn.Linear(out_tensor[0].size(1), 1)
+        out = linear(torch.stack(out_tensor)).squeeze(2)
         out = self.softmax(out)
         return out
 
@@ -111,10 +122,12 @@ def untokenize(tokens, data_dir):
     key_list = list(vocab.keys())
     val_list = list(vocab.values())
     key_list[val_list.index(100)]
-    out = [[''] * len(tokens[0])] * len(tokens)
+    out = []
     for i in range(len(tokens)):
+        row = []
         for j, token in enumerate(tokens[i]):
-            out[i][j] = key_list[val_list.index(eval(token))]
+            row.append(key_list[val_list.index(eval(token))])
+        out.append(row)
     return out
 
 def preprocessData(data_dir):
@@ -131,17 +144,18 @@ def preprocessData(data_dir):
                                    test_size=0.2,
                                    shuffle=True)
     # for development purposes, cut the number of samples to 100
-    # x_train = x_train[:15]
-    # x_dev = x_dev[:15]
-    # y_train = y_train[:15]
-    # y_dev = y_dev[:15]
+    x_train = x_train[:10]
+    x_dev = x_dev[:10]
+    y_train = y_train[:10]
+    y_dev = y_dev[:10]
     ###########################################################
     return np.vstack((np.array(x_train).T,np.array(y_train))).T, np.vstack((np.array(x_dev).T,np.array(y_dev))).T
 
-def epoch(batches, model, loss_fnc, optimizer):
+def epoch(e, batches, model, loss_fnc, optimizer):
     running_loss = 0.
 
     for i, data in enumerate(batches):
+        print('EPOCH {}: Batch {} out of {}'.format(e + 1, i+1, len(batches)))
         # Every data instance is an input + label pair
         words, images, labels = data
 
@@ -162,6 +176,7 @@ def epoch(batches, model, loss_fnc, optimizer):
 
         # Gather data and report
         running_loss += loss.item()
+        print('EPOCH {}: Batch {} out of {}: Running Loss is {}'.format(e + 1, i+1, len(batches), running_loss))
 
     return running_loss / len(batches)
 
@@ -185,19 +200,19 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
     Train the model on the given training dataset located at "data_dir".
     """
     train_data, dev_data = preprocessData(data_dir)
-    model = Model(data_dir)
+    img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
+    model = Model(data_dir, img_path).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     best_vloss = 1_000_000.
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     for e in range(epochs):
-        print('EPOCH {}:'.format(e + 1))
         batches = getBatches(train_data, batch_size)
         vbatches = getBatches(dev_data, batch_size) # validation data split into batches
         # Make sure gradient tracking is on, and do a pass over the data
         model.train(True)
-        avg_loss = epoch(batches, model, loss_fnc, optimizer)
+        avg_loss = epoch(e, batches, model, loss_fnc, optimizer)
 
         # We don't need gradients on to do reporting
         model.train(False)
@@ -205,8 +220,11 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
         running_vloss = 0.0
         for i, vdata in enumerate(vbatches):
             vwords, vimages, vlabels = vdata
-            voutputs = model(vwords, vimages)
-            vloss = loss_fnc(voutputs, vlabels)
+            outputs = model.forward(vwords, vimages)
+            # predictions = torch.argmax(outputs, dim=1)
+            actual = torch.Tensor([np.where(vimages[n] == vlabels[n])[0][0] for n in range(len(vimages))])
+            # argmax function on the outputs
+            vloss = loss_fnc(outputs, actual.type(torch.LongTensor))
             running_vloss += vloss
 
         avg_vloss = running_vloss / (i + 1)
@@ -227,7 +245,52 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
     return
 
 
-def predict(model_dir, data_dir, out_dir, reference_dir):
+def predict(index, model, words, tokens, images, labels):
+    outputs = model.forward(tokens, images)
+    predictions = torch.argmax(outputs, dim=1)
+    actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))])
+    correct = 0
+    for i, p in enumerate(predictions):
+        print("{}. {} {} | Predicted: ({}) {} | Actual: ({}) {}".format(
+            index + i, words[i][0], words[i][1], p, images[i][p], int(actual[i]), labels[i]))
+        if predictions[i] == actual[i]:
+            correct += 1
+    return correct
+
+def evaluate_dataset(data_dir, data, model, step_size):
+    train_words = untokenize([x[0:2] for x in data], data_dir)
+    correct = 0
+    for i in range(0, len(data), step_size):
+        # Words input
+        tokens = torch.tensor([[eval(x[0]), eval(x[1])] for x in data[i:i+step_size]]).to(torch.int64)
+        words = train_words[i:i+step_size]
+        # Images input
+        images = [x[2:-1] for x in data[i:i+step_size]]
+        # output
+        labels = [x[-1] for x in data[i:i+step_size]]
+        correct += predict(i, model, words, tokens, images, labels)
+    return correct
+
+def evaluate(model_dir, data_dir, test_dir, step_size):
+    if test_dir is not None:
+        img_path = glob.glob(test_dir + '/*images*/')[0]
+        X = readXData(glob.glob(test_dir + '/*data*')[0])
+        tokens = tokenize([t[0:2] for t in X], data_dir)
+        for i, row in enumerate(X):
+            X[i][0:2] = tokens[i]
+        y = readYData(glob.glob(test_dir + '/*gold*')[0])
+    else:
+        train_data, dev_data = preprocessData(data_dir)
+        img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
+        model = Model(data_dir, img_path).to(device)
+        model.load_state_dict(torch.load(model_dir))
+        model.eval()
+        # Evaluate on the training data
+        correct = evaluate_dataset(data_dir, train_data, model, step_size)
+        print("Training Data: {} correct predictions out of {} ({} %)".format(correct, len(train_data), 100*correct/len(train_data)))
+        # Evaluate on the dev set
+        correct = evaluate_dataset(data_dir, dev_data, model, step_size)
+        print("Development Data: {} correct predictions out of {} ({} %)".format(correct, len(dev_data), 100*correct/len(dev_data)))
     return
 
 
@@ -241,14 +304,14 @@ if __name__ == "__main__":
     train_parser.add_argument("model_dir")
     train_parser.add_argument("data_dir")
     train_parser.add_argument("--epochs", type=int, default=10)
-    train_parser.add_argument("--batch-size", type=int, default=10)
+    train_parser.add_argument("--batch-size", type=int, default=2)
     train_parser.add_argument("--learning-rate", type=float, default=0.01)
-    predict_parser = subparsers.add_parser("predict")
-    predict_parser.set_defaults(func=predict)
+    predict_parser = subparsers.add_parser("evaluate")
+    predict_parser.set_defaults(func=evaluate)
     predict_parser.add_argument("model_dir")
     predict_parser.add_argument("data_dir")
-    predict_parser.add_argument("out_dir")
-    predict_parser.add_argument("--evaluate", dest='reference_dir')
+    predict_parser.add_argument("--test_dir", type=str, default=None)
+    predict_parser.add_argument("--step_size", type=int, default=2)
     args = parser.parse_args()
     kwargs = vars(args)
     kwargs.pop("func")(**kwargs)
