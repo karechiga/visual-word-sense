@@ -14,10 +14,11 @@ import torch
 import embeddings as emb
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 import datetime
 import os, psutil
 
-print("Baseline: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if torch.cuda.is_available():
     print("USING GPU")
@@ -47,14 +48,9 @@ class Model(torch.nn.Module):
             for i in row:
                 img = Image.open(self.img_path + i).convert('RGB')
                 batch = self.i_preprocess(img).unsqueeze(0).to(device)
-                # if batch.is_cuda:
-                #     print("'batch' using a GPU")
-                # else:
-                #     print("'batch' uses CPU")
                 x = self.i_pretrained(batch).to(device)
                 seqs.append(x)
             samples.append(torch.stack(seqs).to(device))
-            print("{} images pretrained: {} GB".format((n+1)*10, psutil.Process(os.getpid()).memory_info().rss/1000000000))
         return torch.stack(samples).to(device)
     def word_model(self, words):
         # Returns the output of a NN with an input of two words
@@ -63,34 +59,26 @@ class Model(torch.nn.Module):
         x = self.tanh(x).to(device)
         x = self.linear2(x).to(device)
         x = self.tanh(x).to(device)
-        # if x.is_cuda:
-        #     print("'x' using a GPU")
-        # else:
-        #     print("'x' uses CPU")
         return x
     def forward(self, words, images):
         # Networks to be used for the images of the dataset
         i_seqs = self.image_model(images)
-        print("images pretrained: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
+        # print("images pretrained: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
         # Network to be used for the words of the dataset
         w_seq = self.word_model(words)
-        print("words and images pretrained: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
+        # print("words and images pretrained: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
         # Combining the word and image tensors
         out_tensor = []
         for i, sample in enumerate(i_seqs):
             samps = []
             for img in sample:
                 combined = torch.cat((img, w_seq[i])).to(device)
-                # if combined.is_cuda:
-                #     print("'combined' using a GPU")
-                # else:
-                #     print("'combined' uses CPU")
                 samps.append(combined.flatten().to(device))
             out_tensor.append(torch.stack(samps).to(device))
         linear = torch.nn.Linear(out_tensor[0].size(1), 1).to(device)
         out = linear(torch.stack(out_tensor).to(device)).squeeze(2).to(device)
         out = self.softmax(out).to(device)
-        print("forward output: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
+        # print("forward output: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
         return out
 
 def readXData(data_dir):
@@ -149,10 +137,10 @@ def preprocessData(data_dir):
                                    test_size=0.2,
                                    shuffle=True)
     # for development purposes, cut the number of samples to 100
-    # x_train = x_train[:100]
-    # x_dev = x_dev[:100]
-    # y_train = y_train[:100]
-    # y_dev = y_dev[:100]
+    x_train = x_train[:100]
+    x_dev = x_dev[:100]
+    y_train = y_train[:100]
+    y_dev = y_dev[:100]
     ###########################################################
     return np.vstack((np.array(x_train).T,np.array(y_train))).T, np.vstack((np.array(x_dev).T,np.array(y_dev))).T
 
@@ -183,7 +171,7 @@ def epoch(e, batches, model, loss_fnc, optimizer):
         # Gather data and report
         running_loss += loss.item()
         print('EPOCH {}: Batch {} out of {}: Running Loss is {}'.format(e + 1, i+1, len(batches), running_loss))
-        print("{} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
+        # print("{} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
 
     return running_loss / len(batches)
 
@@ -220,23 +208,28 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
         # Make sure gradient tracking is on, and do a pass over the data
         model.train(True)
         avg_loss = epoch(e, batches, model, loss_fnc, optimizer)
-
+        print("Epoch complete: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
+        # print(torch.cuda.memory_summary(device=None, abbreviated=False))
+        model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
         # We don't need gradients on to do reporting
         model.train(False)
-
         running_vloss = 0.0
         for i, vdata in enumerate(vbatches):
+            print("Validation loop {}".format(i+1))
+            outputs = None
+            # print(torch.cuda.memory_summary(device=None, abbreviated=False))
             vwords, vimages, vlabels = vdata
             outputs = model.forward(vwords, vimages).to(device)
+            print(torch.cuda.memory_summary(device=None, abbreviated=False))
             # predictions = torch.argmax(outputs, dim=1)
             actual = torch.Tensor([np.where(vimages[n] == vlabels[n])[0][0] for n in range(len(vimages))]).to(device)
             # argmax function on the outputs
-            vloss = loss_fnc(outputs, actual.type(torch.LongTensor).to(device))
+            vloss = float(loss_fnc(outputs, actual.type(torch.LongTensor).to(device)))
             running_vloss += vloss
 
         avg_vloss = running_vloss / (i + 1)
         print('LOSS train {} valid {}'.format(avg_loss, avg_vloss))
-        print("End of epoch {}: {} GB".format(e+1, psutil.Process(os.getpid()).memory_info().rss/1000000000))
+        # print("End of epoch {}: {} GB".format(e+1, psutil.Process(os.getpid()).memory_info().rss/1000000000))
 
         # Log the running loss averaged per batch
         # for both training and validation
@@ -259,10 +252,13 @@ def predict(index, model, words, tokens, images, labels):
     actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))])
     correct = 0
     for i, p in enumerate(predictions):
-        print("{}. {} {} | Predicted: ({}) {} | Actual: ({}) {}".format(
-            index + i, words[i][0], words[i][1], p, images[i][p], int(actual[i]), labels[i]))
         if predictions[i] == actual[i]:
             correct += 1
+            print("CORRECT:\t{}. {} {}\t| Predicted: ({}) {}\t| Actual: ({}) {}".format(
+                    index + i, words[i][0], words[i][1], p, images[i][p], int(actual[i]), labels[i]))
+        else:
+            print("INCORRECT:\t{}. {} {}\t| Predicted: ({}) {}\t| Actual: ({}) {}".format(
+                    index + i, words[i][0], words[i][1], p, images[i][p], int(actual[i]), labels[i]))
     return correct
 
 def evaluate_dataset(data_dir, data, model, step_size):
@@ -294,15 +290,13 @@ def evaluate(model_dir, data_dir, test_dir, step_size):
         model.load_state_dict(torch.load(model_dir))
         model.eval()
         # Evaluate on the training data
-        correct = evaluate_dataset(data_dir, train_data, model, step_size)
-        print("Training Data: {} correct predictions out of {} ({} %)".format(correct, len(train_data), 100*correct/len(train_data)))
-        print("{} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
-
+        print("Training Data evaluation")
+        tcorrect = evaluate_dataset(data_dir, train_data, model, step_size)
         # Evaluate on the dev set
-        correct = evaluate_dataset(data_dir, dev_data, model, step_size)
-        print("Development Data: {} correct predictions out of {} ({} %)".format(correct, len(dev_data), 100*correct/len(dev_data)))
-        print("{} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
-
+        print("Development Data evaluation")
+        dcorrect = evaluate_dataset(data_dir, dev_data, model, step_size)
+        print("Training Data: {} correct predictions out of {} ({} %)\n".format(tcorrect, len(train_data), 100*tcorrect/len(train_data)) +
+              "Development Data: {} correct predictions out of {} ({} %)".format(dcorrect, len(dev_data), 100*dcorrect/len(dev_data)))
     return
 
 
