@@ -7,34 +7,35 @@ import glob
 import json
 import torch
 
-
-def createPretrainedNLPFile(data_dir):
+def readGloVeFile(data_dir):
     vocab = dict()
-    with open(data_dir + '/embeddings/glove.6B.50d.txt','rt', encoding="utf8") as fi:
-        full_content = fi.read().strip().split('\n')
-    for i in range(len(full_content)):
-        i_word = full_content[i].split(' ')[0]
-        i_embeddings = [float(val) for val in full_content[i].split(' ')[1:]]
-        vocab[i_word] = i_embeddings
-    with open(data_dir + "/embeddings/vocab.json", "w") as outfile:
-        outfile.write(json.dumps(vocab, indent=4))
-    return
+    try:
+        with open(data_dir + '/embeddings/glove.42B.300d.txt','rt', encoding="utf8") as fi:
+            full_content = fi.read().strip().split('\n')
+        for i in range(len(full_content)):
+            i_word = full_content[i].split(' ')[0]
+            i_embeddings = [float(val) for val in full_content[i].split(' ')[1:]]
+            vocab[i_word] = i_embeddings
+    except:
+        vocab = json.load(open(data_dir + "/embeddings/vocab.json",'r'))
+    return vocab
+
+# def createPretrainedNLPFile(data_dir):
+#     vocab = readGloVeFile(data_dir)
+#     with open(data_dir + "/embeddings/vocab.json", "w") as outfile:
+#         outfile.write(json.dumps(vocab, indent=4))
+#         # save as torch?
+#     return vocab
 
 def getGloVeVocab(data_dir):
-    # Create a json dictionary of pretrained word embeddings (if it doesn't already exist)
-    if not os.path.exists(data_dir + "/embeddings/vocab.json"):
-        createPretrainedNLPFile(data_dir)
-    vocab = json.load(open(data_dir + "/embeddings/vocab.json",'r'))
+    vocab = readGloVeFile(data_dir)
     vocab_npa = np.vstack(list(vocab.keys()))
     #insert '<unk>' tokens at start of vocab_npa.
     vocab_npa = np.insert(vocab_npa, 0, '<unk>')
     return vocab_npa
 
 def getGloVeEmbeddings(data_dir):
-    # Create a json dictionary of pretrained word embeddings (if it doesn't already exist)
-    if not os.path.exists(data_dir + "/embeddings/vocab.json"):
-        createPretrainedNLPFile(data_dir)
-    vocab = json.load(open(data_dir + "/embeddings/vocab.json",'r'))
+    vocab = readGloVeFile(data_dir)
     embs_npa = np.vstack(list(vocab.values()))
     unk_emb_npa = np.mean(embs_npa,axis=0,keepdims=True)    #embedding for '<unk>' token.
     #insert embeddings for unk tokens at top of embs_npa.
@@ -55,9 +56,8 @@ def getTokenizedVocab(data_dir):
     return tokens
 
 def wordEmbeddingLayer(data_dir):
-    emb = getGloVeEmbeddings(data_dir)
-    layer =  torch.nn.Embedding.from_pretrained(torch.from_numpy(emb).float())
-    return layer
+    return torch.nn.Embedding.from_pretrained(
+        torch.from_numpy(getGloVeEmbeddings(data_dir)).float())
 
 def getImageEmbeddings(data_dir):
     # Create a dictionary of images

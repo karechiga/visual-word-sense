@@ -38,14 +38,14 @@ class Model(torch.nn.Module):
         res50 = None
         i_weights = None
         layers = None
-        self.linear1 = torch.nn.Linear(50, 512)
-        self.linear2 = torch.nn.Linear(512, 2048)
+        self.linear1 = torch.nn.Linear(300, 512, device=device)
+        self.linear2 = torch.nn.Linear(512, 2048, device=device)
+        self.linear3 = torch.nn.Linear(6144, 1, device=device)
         self.relu = torch.nn.ReLU()
         self.tanh = torch.nn.Tanh()
-        self.softmax = torch.nn.Softmax(dim=1)
+        # self.softmax = torch.nn.Softmax(dim=1)
         # self.conv = torch.nn.Conv2d(5,5,2)
         # self.pooling = torch.nn.MaxPool2d(2)
-        
     def image_model(self, images):
         # Returns outputs of NNs with input of multiple images
         samples = []
@@ -61,10 +61,10 @@ class Model(torch.nn.Module):
     def word_model(self, words):
         # Returns the output of a NN with an input of two words
         x = self.w_embeddings(words.to(device))
-        x = self.linear1(x).to(device)
-        x = self.tanh(x).to(device)
-        x = self.linear2(x).to(device)
-        x = self.tanh(x).to(device)
+        x = self.linear1(x)
+        x = self.tanh(x)
+        x = self.linear2(x)
+        x = self.tanh(x)
         return x
     def forward(self, words, images):
         # Networks to be used for the images of the dataset
@@ -81,9 +81,8 @@ class Model(torch.nn.Module):
                 combined = torch.cat((img.unsqueeze(0), w_seq[i])).to(device)
                 samps.append(combined.flatten().to(device))
             out_tensor.append(torch.stack(samps).to(device))
-        linear = torch.nn.Linear(out_tensor[0].size(1), 1).to(device)
-        out = linear(torch.stack(out_tensor).to(device)).squeeze(2).to(device)
-        out = self.softmax(out).to(device)
+        out = self.linear3(torch.stack(out_tensor).to(device)).squeeze(2)
+        # out = self.softmax(out).to(device)
         # print("forward output: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
         return out
 
@@ -142,17 +141,33 @@ def preprocessData(data_dir):
                                    random_state=162,
                                    test_size=0.2,
                                    shuffle=True)
-    # for development purposes, cut the number of samples to 100
-    # x_train = x_train[:10]
-    # x_dev = x_dev[:10]
-    # y_train = y_train[:10]
-    # y_dev = y_dev[:10]
+    # for development purposes, cut the number of samples
+    # remove '<unk>' tokens
+    train_idx = [x_train.index(x) for x in x_train if x[0] == 0 or x[1] == 0]
+    dev_idx = [x_dev.index(x) for x in x_dev if x[0] == 0 or x[1] == 0]
+    print("TRAINING DATA: Removing {} samples that include unknown tokens out {} total samples.".format(
+        len(train_idx), len(y_train)-len(train_idx)))
+    print("DEV DATA: Removing {} samples that include unknown tokens out {} total samples.".format(
+        len(dev_idx), len(y_dev)-len(dev_idx)))
+    x_train = [x_train[i] for i in train_idx]
+    x_dev = [x_dev[i] for i in dev_idx]
+    y_train = [y_train[i] for i in train_idx]
+    y_dev = [y_dev[i] for i in dev_idx]
+    train_size = 500
+    dev_size = 500
+    print("Reducing Training data to {} elements, Dev data to {} elements.".format(
+        train_size, dev_size))
+    x_train = x_train[:train_size]
+    x_dev = x_dev[:dev_size]
+    y_train = y_train[:train_size]
+    y_dev = y_dev[:dev_size]
     ###########################################################
     return np.vstack((np.array(x_train).T,np.array(y_train))).T, np.vstack((np.array(x_dev).T,np.array(y_dev))).T
 
 def epoch(e, batches, model, loss_fnc, optimizer):
     running_loss = 0.
-    print("Start of epoch {}: {} GB".format(e+1, psutil.Process(os.getpid()).memory_info().rss/1000000000))
+    correct = 0
+    total = 0
     for i, data in enumerate(batches):
         print('EPOCH {}: Batch {} out of {}'.format(e + 1, i+1, len(batches)))
         # Every data instance is an input + label pair
@@ -162,11 +177,13 @@ def epoch(e, batches, model, loss_fnc, optimizer):
         optimizer.zero_grad()
 
         # Make predictions for this batch
-        # Make predictions for this batch
         outputs = None
         outputs = model.forward(words, images)
-        # predictions = torch.argmax(outputs, dim=1)
+        softmax = torch.nn.Softmax(dim=1)
+        predictions = torch.argmax(softmax(outputs), dim=1)
         actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))]).to(device)
+        correct += int(sum(predictions == actual))
+        total += len(predictions)
         # argmax function on the outputs
         # Compute the loss and its gradients
         loss = loss_fnc(outputs, actual.type(torch.LongTensor).to(device)).to(device)
@@ -177,10 +194,10 @@ def epoch(e, batches, model, loss_fnc, optimizer):
 
         # Gather data and report
         running_loss += float(loss.item())
-        print('EPOCH {}: Batch {} out of {}: Running Loss is {}'.format(e + 1, i+1, len(batches), running_loss))
-        # print("{} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
+        print('EPOCH {}: Batch {} out of {}: Average Loss is {}, Accuracy is {}%'.format(
+            e + 1, i+1, len(batches), round(running_loss/i+1,2), round(100*correct / total, 2)))
 
-    return running_loss / len(batches)
+    return running_loss / len(batches), correct / total
 
 def getBatches(data, batch_size):
     batches = [] # the training data split into batches
@@ -205,23 +222,27 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
     model = Model(data_dir, img_path).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
+    # loss_fnc = torch.nn.NLLLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     best_vloss = 1_000_000.
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    print("Epochs: {}\tbatch_size: {}\tlearning_rate: {}".format(epochs, batch_size, learning_rate))
     for e in range(epochs):
         batches = getBatches(train_data, batch_size)
         vbatches = getBatches(dev_data, batch_size) # validation data split into batches
         # Make sure gradient tracking is on, and do a pass over the data
         model.train(True)
         avg_loss = None
-        avg_loss = epoch(e, batches, model, loss_fnc, optimizer)
-        print("Epoch complete: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
+        accuracy = 0
+        avg_loss, accuracy = epoch(e, batches, model, loss_fnc, optimizer)
         # print(torch.cuda.memory_summary(device=None, abbreviated=False))
         model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
         # We don't need gradients on to do reporting
         model.train(False)
         running_vloss = 0.0
+        correct = 0
+        total = 0
         for i, vdata in enumerate(vbatches):
             print("Validation loop {}".format(i+1))
             outputs = None
@@ -229,35 +250,33 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
             vwords, vimages, vlabels = vdata
             outputs = model.forward(vwords, vimages).to(device)
             # print(torch.cuda.memory_summary(device=None, abbreviated=False))
-            # predictions = torch.argmax(outputs, dim=1)
+            softmax = torch.nn.Softmax(dim=1)
+            predictions = torch.argmax(softmax(outputs), dim=1)
             actual = torch.Tensor([np.where(vimages[n] == vlabels[n])[0][0] for n in range(len(vimages))]).to(device)
+            correct += int(sum(predictions == actual))
+            total += len(predictions)
             # argmax function on the outputs
             vloss = float(loss_fnc(outputs, actual.type(torch.LongTensor).to(device)))
             running_vloss += vloss
         outputs = None
         avg_vloss = running_vloss / (i + 1)
-        print('LOSS train {} valid {}'.format(avg_loss, avg_vloss))
-        # print("End of epoch {}: {} GB".format(e+1, psutil.Process(os.getpid()).memory_info().rss/1000000000))
-
-        # Log the running loss averaged per batch
-        # for both training and validation
-        # writer.add_scalars('Training vs. Validation Loss',
-        #                 { 'Training' : avg_loss, 'Validation' : avg_vloss },
-        #                 epoch_number + 1)
-        # writer.flush()
-
+        vaccuracy = correct / total
+        print('Loss:\t\ttrain {}\tvalidation {}'.format(round(avg_loss,2), round(avg_vloss,2)))
+        print('Accuracy:\ttrain {}%\tvalidation {}%'.format(round(100*accuracy,2), round(100*vaccuracy,2)))
         # Track best performance, and save the model's state
         if avg_vloss < best_vloss:
             print('saving model')
             best_vloss = avg_vloss
-            model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
+            model_path = model_dir + '/' + 'model_{}_{}_E{}_BS{}_LR{}_'.format(
+                timestamp, e, epochs, batch_size, learning_rate)
             torch.save(model.state_dict(), model_path)
     return
 
 
 def predict(index, model, words, tokens, images, labels):
     outputs = model.forward(tokens, images)
-    predictions = torch.argmax(outputs, dim=1)
+    softmax = torch.nn.Softmax(dim=1)
+    predictions = torch.argmax(softmax(outputs), dim=1)
     actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))])
     correct = 0
     for i, p in enumerate(predictions):
