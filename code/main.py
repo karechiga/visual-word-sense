@@ -17,7 +17,8 @@ Image.MAX_IMAGE_PIXELS = None
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 import datetime
-import os, psutil
+import matplotlib.pyplot as plt
+import os
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if torch.cuda.is_available():
@@ -103,6 +104,20 @@ def readYData(data_dir):
         data = fi.read().split('\n')
     return data[0:-1]
 
+def plotPerformance(losses, accs):
+    plt.figure(figsize=(10, 10))
+    ax1 = plt.subplot(211)
+    ax2 = plt.subplot(212)
+    ax1.plot(np.arange(1,len(losses)+1), losses, 'r:')
+    ax2.plot(np.arange(1,len(accs)+1), accs, 'b:')
+    ax1.set_ylim(bottom=0)
+    ax2.set_ylim([0, 100])
+    ax1.set_ylabel('Cross Entropy Loss')
+    ax2.set_ylabel('Model Accuracy (%)')
+    ax1.set_xticks(np.arange(1,len(losses)+1, 2))
+    ax2.set_xticks(np.arange(1,len(accs)+1, 2))
+    return ax1, ax2
+
 def tokenize(words, data_dir):
     # takes in a 2D list of words and returns a 2D list of their corresponding tokens.
     tokens = emb.getTokenizedVocab(data_dir)
@@ -128,7 +143,7 @@ def untokenize(tokens, data_dir):
         out.append(row)
     return out
 
-def preprocessData(data_dir):
+def preprocessData(data_dir, train_size, dev_size):
     # Read the training data from "data_dir"
     # Reading the text data
     X = readXData(glob.glob(data_dir + '/*train*/*data*')[0])
@@ -145,22 +160,24 @@ def preprocessData(data_dir):
     # remove '<unk>' tokens
     train_idx = [x_train.index(x) for x in x_train if x[0] == 0 or x[1] == 0]
     dev_idx = [x_dev.index(x) for x in x_dev if x[0] == 0 or x[1] == 0]
-    print("TRAINING DATA: Removing {} samples that include unknown tokens out {} total samples.".format(
+    print("TRAINING DATA: Removing {} samples that include unknown tokens out of {} total samples.".format(
         len(train_idx), len(y_train)-len(train_idx)))
-    print("DEV DATA: Removing {} samples that include unknown tokens out {} total samples.".format(
+    print("DEV DATA: Removing {} samples that include unknown tokens out of {} total samples.".format(
         len(dev_idx), len(y_dev)-len(dev_idx)))
     x_train = [x_train[i] for i in train_idx]
     x_dev = [x_dev[i] for i in dev_idx]
     y_train = [y_train[i] for i in train_idx]
     y_dev = [y_dev[i] for i in dev_idx]
-    train_size = 500
-    dev_size = 500
-    print("Reducing Training data to {} elements, Dev data to {} elements.".format(
-        train_size, dev_size))
-    x_train = x_train[:train_size]
-    x_dev = x_dev[:dev_size]
-    y_train = y_train[:train_size]
-    y_dev = y_dev[:dev_size]
+    if train_size < len(y_train):
+        x_train = x_train[:train_size]
+        y_train = y_train[:train_size]
+        print("Reducing Training data to {} elements".format(
+            train_size))
+    if dev_size < len(y_dev):
+        x_dev = x_dev[:dev_size]
+        y_dev = y_dev[:dev_size]
+        print("Reducing Dev data to {} elements.".format(
+            dev_size))
     ###########################################################
     return np.vstack((np.array(x_train).T,np.array(y_train))).T, np.vstack((np.array(x_dev).T,np.array(y_dev))).T
 
@@ -168,6 +185,8 @@ def epoch(e, batches, model, loss_fnc, optimizer):
     running_loss = 0.
     correct = 0
     total = 0
+    losses = []
+    accuracies = []
     for i, data in enumerate(batches):
         print('EPOCH {}: Batch {} out of {}'.format(e + 1, i+1, len(batches)))
         # Every data instance is an input + label pair
@@ -194,10 +213,11 @@ def epoch(e, batches, model, loss_fnc, optimizer):
 
         # Gather data and report
         running_loss += float(loss.item())
+        losses.append(round(running_loss/(i+1),2))
+        accuracies.append(round(100*correct / total, 2))
         print('EPOCH {}: Batch {} out of {}: Average Loss is {}, Accuracy is {}%'.format(
-            e + 1, i+1, len(batches), round(running_loss/i+1,2), round(100*correct / total, 2)))
-
-    return running_loss / len(batches), correct / total
+            e + 1, i+1, len(batches), losses[i], accuracies[i]))
+    return running_loss / len(batches), correct / total, losses, accuracies
 
 def getBatches(data, batch_size):
     batches = [] # the training data split into batches
@@ -214,7 +234,7 @@ def getBatches(data, batch_size):
         batches.append(batch)
     return batches
 
-def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
+def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, train_size=1000000, dev_size=1000000):
     """
     Train the model on the given training dataset located at "data_dir".
     """
@@ -227,7 +247,12 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
 
     best_vloss = 1_000_000.
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    print("Epochs: {}\tbatch_size: {}\tlearning_rate: {}".format(epochs, batch_size, learning_rate))
+    losses = []
+    accs = []
+    v_losses = []
+    v_accs = []
+    model_dir = model_dir + '/model_{}'.format(timestamp)
+    os.mkdir(model_dir)
     for e in range(epochs):
         batches = getBatches(train_data, batch_size)
         vbatches = getBatches(dev_data, batch_size) # validation data split into batches
@@ -235,9 +260,25 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
         model.train(True)
         avg_loss = None
         accuracy = 0
-        avg_loss, accuracy = epoch(e, batches, model, loss_fnc, optimizer)
-        # print(torch.cuda.memory_summary(device=None, abbreviated=False))
-        model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
+        avg_loss, accuracy, e_losses, e_accs = epoch(e, batches, model, loss_fnc, optimizer)
+        losses.append(round(avg_loss,2))
+        accs.append(round(100*accuracy,2))
+        # Plot the epoch and save it
+        ax1, ax2 = plotPerformance(e_losses, e_accs)
+        ax1.set_title('Epoch {}/{} LOSS: batch_size = {}, learning_rate = {}'.format(
+            e+1, epochs, batch_size, learning_rate
+        ))
+        ax2.set_title('Epoch {}/{} ACCURACY: batch_size = {}, learning_rate = {}'.format(
+            e+1, epochs, batch_size, learning_rate
+        ))
+        plt.xlabel('Batch Number')
+        plt.savefig(model_dir + '/{}_Epoch{}_BS{}_LR{}.png'.format(
+            timestamp, e+1, batch_size, learning_rate))
+        plt.cla()
+        e_accs = None
+        e_losses = None
+        # Clear the plot after saving it
+        model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e+1)
         # We don't need gradients on to do reporting
         model.train(False)
         running_vloss = 0.0
@@ -259,17 +300,41 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01):
             vloss = float(loss_fnc(outputs, actual.type(torch.LongTensor).to(device)))
             running_vloss += vloss
         outputs = None
-        avg_vloss = running_vloss / (i + 1)
-        vaccuracy = correct / total
-        print('Loss:\t\ttrain {}\tvalidation {}'.format(round(avg_loss,2), round(avg_vloss,2)))
-        print('Accuracy:\ttrain {}%\tvalidation {}%'.format(round(100*accuracy,2), round(100*vaccuracy,2)))
+        v_losses.append(round(running_vloss / (i + 1),2))
+        v_accs.append(round(100 * correct / total,2))
+        print('Loss:\t\ttrain {}\tvalidation {}'.format(losses[e], v_losses[e]))
+        print('Accuracy:\ttrain {}%\tvalidation {}%'.format(accs[e], v_accs[e]))
+
         # Track best performance, and save the model's state
-        if avg_vloss < best_vloss:
+        if v_accs[e] > 50:  # Only save model if it is greater than 50% accuracy on the dev set
             print('saving model')
-            best_vloss = avg_vloss
-            model_path = model_dir + '/' + 'model_{}_{}_E{}_BS{}_LR{}_'.format(
-                timestamp, e, epochs, batch_size, learning_rate)
+            model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
             torch.save(model.state_dict(), model_path)
+    # Plot performance on training data
+    ax1, ax2 = plotPerformance(losses, accs)
+    ax1.set_title('Training {} LOSS: batch_size = {}, learning_rate = {}'.format(
+        timestamp, batch_size, learning_rate
+    ))
+    ax2.set_title('Training {} ACCURACY: batch_size = {}, learning_rate = {}'.format(
+        timestamp, batch_size, learning_rate
+    ))
+    plt.xlabel('Epoch Number')
+    plt.savefig(model_dir + '/{}_TrainData_BS{}_LR{}.png'.format(
+        timestamp, batch_size, learning_rate))
+    plt.cla()
+    
+    # Plot Performance on Dev data
+    ax1, ax2 = plotPerformance(v_losses, v_accs)
+    ax1.set_title('Development {} LOSS: batch_size = {}, learning_rate = {}'.format(
+        timestamp, batch_size, learning_rate
+    ))
+    ax2.set_title('Development {} ACCURACY: batch_size = {}, learning_rate = {}'.format(
+        timestamp, batch_size, learning_rate
+    ))
+    plt.xlabel('Epoch Number')
+    plt.savefig(model_dir + '/{}_DevData_BS{}_LR{}.png'.format(
+        timestamp, batch_size, learning_rate))
+    plt.cla()
     return
 
 
@@ -340,6 +405,8 @@ if __name__ == "__main__":
     train_parser.add_argument("--epochs", type=int, default=10)
     train_parser.add_argument("--batch-size", type=int, default=10)
     train_parser.add_argument("--learning-rate", type=float, default=0.01)
+    train_parser.add_argument("--train_size", type=int, default=1000000)
+    train_parser.add_argument("--dev_size", type=int, default=1000000)
     predict_parser = subparsers.add_parser("evaluate")
     predict_parser.set_defaults(func=evaluate)
     predict_parser.add_argument("model_dir")
