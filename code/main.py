@@ -238,7 +238,7 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, t
     """
     Train the model on the given training dataset located at "data_dir".
     """
-    train_data, dev_data = preprocessData(data_dir)
+    train_data, dev_data = preprocessData(data_dir, train_size, dev_size)
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
     model = Model(data_dir, img_path).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
@@ -322,7 +322,6 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, t
     plt.savefig(model_dir + '/{}_TrainData_BS{}_LR{}.png'.format(
         timestamp, batch_size, learning_rate))
     plt.cla()
-    
     # Plot Performance on Dev data
     ax1, ax2 = plotPerformance(v_losses, v_accs)
     ax1.set_title('Development {} LOSS: batch_size = {}, learning_rate = {}'.format(
