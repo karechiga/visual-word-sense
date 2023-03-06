@@ -17,7 +17,10 @@ def readGloVeFile(data_dir):
             i_embeddings = [float(val) for val in full_content[i].split(' ')[1:]]
             vocab[i_word] = i_embeddings
     except:
-        vocab = json.load(open(data_dir + "/embeddings/vocab.json",'r'))
+        try:
+            vocab = json.load(open(data_dir + "/embeddings/vocab.json",'r'))
+        except:
+            raise Exception('Could not load embedding file.')
     return vocab
 
 # def createPretrainedNLPFile(data_dir):
@@ -66,3 +69,28 @@ def getImageEmbeddings(data_dir):
     for img in os.listdir(img_path):
         imgs.append(img)
         # imgs[img] = cv.imread(img_path + img)
+
+def tokenize(words, data_dir):
+    # takes in a 2D list of words and returns a 2D list of their corresponding tokens.
+    tokens = getTokenizedVocab(data_dir)
+    out = np.zeros(shape=(len(words), len(words[0])))
+    for i in range(len(words)):
+        for j, word in enumerate(words[i]):
+            try:
+                out[i,j] = tokens[word]
+            except:
+                out[i,j] = 0    # token is zero for unknown tokens
+    return out
+
+def untokenize(tokens, data_dir):
+    vocab = getTokenizedVocab(data_dir)
+    key_list = list(vocab.keys())
+    val_list = list(vocab.values())
+    key_list[val_list.index(100)]
+    out = []
+    for i in range(len(tokens)):
+        row = []
+        for j, token in enumerate(tokens[i]):
+            row.append(key_list[val_list.index(eval(token))])
+        out.append(row)
+    return out
