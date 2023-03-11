@@ -22,7 +22,11 @@ default_config = {
     "epochs": 3,
     "train_size": 500,
     "dev_size": 200,
-    "dropout": 0.25
+    "dropout": 0.25,
+    'word_linears': 2,
+    'word_activations': 'tanh',
+    'out_linears': 2,
+    'out_activations': 'relu'
     }
 
 def main():
@@ -46,16 +50,33 @@ def main():
             res50 = None
             i_weights = None
             layers = None
-            self.linear1 = torch.nn.Linear(300, 512, device=device)
-            self.linear2 = torch.nn.Linear(512, 2048, device=device)
-            self.linear3 = torch.nn.Linear(6144, 3072, device=device)
-            self.linear4 = torch.nn.Linear(3072, 1, device=device)
-            self.relu = torch.nn.ReLU()
-            self.tanh = torch.nn.Tanh()
-            self.drop = torch.nn.Dropout(p=wandb.config['dropout'])
-            # self.softmax = torch.nn.Softmax(dim=1)
-            # self.conv = torch.nn.Conv2d(5,5,2)
-            # self.pooling = torch.nn.MaxPool2d(2)
+            w_activation = torch.nn.ReLU() if wandb.config['word_activations'] == 'relu' else torch.nn.Tanh()
+            if wandb.config['word_linears'] == 1:
+                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 2048, device=device), w_activation)
+            elif wandb.config['word_linears'] == 2:
+                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
+                                                        torch.nn.Linear(512, 2048, device=device), w_activation)
+            elif wandb.config['word_linears'] == 3:
+                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
+                                                        torch.nn.Linear(512, 1024, device=device), w_activation,
+                                                        torch.nn.Linear(1024, 2048, device=device), w_activation)
+            
+            o_activation = torch.nn.ReLU() if wandb.config['out_activations'] == 'relu' else torch.nn.Tanh()
+            drop = torch.nn.Dropout(p=wandb.config['dropout'])
+            if wandb.config['out_linears'] == 1:
+                self.o_sequential = torch.nn.Sequential(drop, torch.nn.Linear(6144, 1, device=device))
+            elif wandb.config['out_linears'] == 2:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
+                                                        o_activation, torch.nn.Linear(3072, 1, device=device))
+            elif wandb.config['out_linears'] == 3:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
+                                                        o_activation, torch.nn.Linear(3072, 1024, device=device),
+                                                        o_activation, torch.nn.Linear(1024, 1, device=device))
+            elif wandb.config['out_linears'] == 4:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
+                                                        o_activation, torch.nn.Linear(3072, 1024, device=device),
+                                                        o_activation, torch.nn.Linear(1024, 512, device=device),
+                                                        drop, o_activation, torch.nn.Linear(512, 1, device=device))
         def image_model(self, images):
             # Returns outputs of NNs with input of multiple images
             samples = []
@@ -71,10 +92,7 @@ def main():
         def word_model(self, words):
             # Returns the output of a NN with an input of two words
             x = self.w_embeddings(words.to(device))
-            x = self.linear1(x)
-            x = self.tanh(x)
-            x = self.linear2(x)
-            x = self.tanh(x)
+            x = self.w_sequential(x)
             return x
         def forward(self, words, images):
             # Networks to be used for the images of the dataset
@@ -91,17 +109,12 @@ def main():
                     x = torch.cat((img.unsqueeze(0), w_seq[i])).to(device)
                     samps.append(x.flatten())
                 out_tensor.append(torch.stack(samps).to(device))
-            out = self.linear3(torch.stack(out_tensor).to(device))
-            out = self.relu(out)
-            out = self.drop(out)
-            out = self.linear4(out).squeeze(2)
-            # out = self.softmax(out).to(device)
+            out = self.o_sequential(torch.stack(out_tensor).to(device)).squeeze(2)
             # print("forward output: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
             return out
 
     train_data, dev_data = pre.preprocessData(data_dir, wandb.config.train_size, wandb.config.dev_size)
-    wandb.config.train_size = len(train_data)
-    wandb.config.dev_size = len(dev_data)
+    wandb.config.update({'train_size':len(train_data), 'dev_size':len(dev_data)}, allow_val_change=True)
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
     model = Model(data_dir, img_path).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
@@ -112,10 +125,6 @@ def main():
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     print('{} - lr{} batchsize{} epochs{} train_size{} dev_size{}'.format(
         timestamp, wandb.config.learning_rate, wandb.config.batch_size, wandb.config.epochs, len(train_data), len(dev_data)))
-    model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
-        timestamp, round(wandb.config.learning_rate,5), wandb.config.batch_size, wandb.config.epochs, len(train_data))
-    print('Model dir: {}'.format(model_dir))
-    os.mkdir(model_dir)
     for e in range(wandb.config.epochs):
         batches = pre.getBatches(train_data, wandb.config.batch_size)
         vbatches = pre.getBatches(dev_data, wandb.config.batch_size) # validation data split into batches
@@ -131,11 +140,15 @@ def main():
         val_loss, val_acc = mn.eval_epoch(vbatches, model, loss_fnc)
         wandb.log({"val_acc": val_acc, "val_loss": val_loss})
         print('Loss:\t\ttrain {}\tvalidation {}'.format(round(avg_loss,2), round(val_loss,2)))
-        print('Accuracy:\ttrain {}%\tvalidation {}%'.format(round(100*accuracy,2), round(val_acc,2)))
+        print('Accuracy:\ttrain {}%\tvalidation {}%'.format(round(100*accuracy,2), round(100*val_acc,2)))
 
         # Track best performance, and save the model's state
         if val_acc > 0.70:  # Only save model if it is greater than 50% accuracy on the dev set
             print('saving model')
+            model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
+                timestamp, round(wandb.config.learning_rate,5), wandb.config.batch_size, wandb.config.epochs, len(train_data))
+            os.mkdir(model_dir)
+            print('Model dir: {}'.format(model_dir))
             model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
             torch.save(model.state_dict(), model_path)
     return
@@ -172,7 +185,11 @@ if __name__ == "__main__":
             },
         'parameters': {
             'dropout': {'max': 0.9, 'min': 0.10},
-            'learning_rate': {'max': 0.0002, 'min': 0.000001},
+            'learning_rate': {'max': 0.0008, 'min': 0.000001},
+            'word_linears': {'values': [1, 2, 3]},
+            'word_activations': {'values': ['tanh', 'relu']},
+            'out_linears': {'values': [1, 2, 3, 4]},
+            'out_activations': {'values': ['tanh', 'relu']}
             }
         }
         sweep_id = wandb.sweep(sweep=sweep_config, project="visualwordsense")

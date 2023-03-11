@@ -24,7 +24,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if torch.cuda.is_available():
     print("USING GPU")
 
-def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_size):
+def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_size,
+                   word_linears, word_activations, out_linears, out_activations):
     # start a new wandb run to track this script
     wandb.init(
         # set the wandb project where this run will be logged
@@ -37,7 +38,11 @@ def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_s
         "epochs": epochs,
         "dropout": dropout,
         "train_size": train_size,
-        "dev_size": dev_size
+        "dev_size": dev_size,
+        'word_linears': word_linears,
+        'word_activations': word_activations,
+        'out_linears': out_linears,
+        'out_activations': out_activations
         }
     )
 
@@ -80,6 +85,8 @@ def train_epoch(e, batches, model, loss_fnc, optimizer):
         # argmax function on the outputs
         # Compute the loss and its gradients
         loss = loss_fnc(outputs, actual.type(torch.LongTensor).to(device)).to(device)
+        print('out:\t{}'.format(outputs[0:3]))
+        print('actual:\t{}'.format(actual[0:3]))
         loss.backward()
 
         # Adjust learning weights
@@ -88,7 +95,7 @@ def train_epoch(e, batches, model, loss_fnc, optimizer):
         # Gather data and report
         running_loss += float(loss.item())
         print('EPOCH {}: Batch {} out of {}: Average Loss is {}, Accuracy is {}%'.format(
-            e + 1, i+1, len(batches), running_loss / len(batches), correct / total))
+            e + 1, i+1, len(batches), round(running_loss / (i+1),3), round(100*correct / total,2)))
     return running_loss / len(batches), correct / total
 
 def eval_epoch(vbatches, model, loss_fnc):
@@ -111,16 +118,22 @@ def eval_epoch(vbatches, model, loss_fnc):
         total += len(predictions)
         # argmax function on the outputs
         vloss = float(loss_fnc(outputs, actual.type(torch.LongTensor).to(device)))
+        print('out:\t{}'.format(outputs[0:3]))
+        print('actual:\t{}'.format(actual[0:3]))
         running_vloss += vloss
+        print('Batch {} out of {}: Average Loss is {}, Accuracy is {}%'.format(
+            i+1, len(vbatches), round(running_vloss / (i+1),3), round(100*correct / total,2)))
     outputs = None
     return running_vloss / (i + 1) , correct / total
 
-def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000):
+def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
+          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu'):
     """
     Train the model on the given training dataset located at "data_dir".
     """
     train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
-    configureWandB(learning_rate, batch_size, epochs, dropout, len(train_data), len(dev_data))
+    configureWandB(learning_rate, batch_size, epochs, dropout, len(train_data), len(dev_data),
+                   word_linears, word_activations, out_linears, out_activations)
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
     class Model(torch.nn.Module):
         def __init__(self, data_dir, img_path):
@@ -137,16 +150,33 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, d
             res50 = None
             i_weights = None
             layers = None
-            self.linear1 = torch.nn.Linear(300, 512, device=device)
-            self.linear2 = torch.nn.Linear(512, 2048, device=device)
-            self.linear3 = torch.nn.Linear(6144, 3072, device=device)
-            self.linear4 = torch.nn.Linear(3072, 1, device=device)
-            self.relu = torch.nn.ReLU()
-            self.tanh = torch.nn.Tanh()
-            self.drop = torch.nn.Dropout(p=dropout)
-            # self.softmax = torch.nn.Softmax(dim=1)
-            # self.conv = torch.nn.Conv2d(5,5,2)
-            # self.pooling = torch.nn.MaxPool2d(2)
+            w_activation = torch.nn.ReLU() if wandb.config['word_activations'] == 'relu' else torch.nn.Tanh()
+            if wandb.config['word_linears'] == 1:
+                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 2048, device=device), w_activation)
+            elif wandb.config['word_linears'] == 2:
+                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
+                                                        torch.nn.Linear(512, 2048, device=device), w_activation)
+            elif wandb.config['word_linears'] == 3:
+                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
+                                                        torch.nn.Linear(512, 1024, device=device), w_activation,
+                                                        torch.nn.Linear(1024, 2048, device=device), w_activation)
+            
+            o_activation = torch.nn.ReLU() if wandb.config['out_activations'] == 'relu' else torch.nn.Tanh()
+            drop = torch.nn.Dropout(p=wandb.config['dropout'])
+            if wandb.config['out_linears'] == 1:
+                self.o_sequential = torch.nn.Sequential(drop, torch.nn.Linear(6144, 1, device=device))
+            elif wandb.config['out_linears'] == 2:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
+                                                        o_activation, torch.nn.Linear(3072, 1, device=device))
+            elif wandb.config['out_linears'] == 3:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
+                                                        o_activation, torch.nn.Linear(3072, 1024, device=device),
+                                                        o_activation, torch.nn.Linear(1024, 1, device=device))
+            elif wandb.config['out_linears'] == 4:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
+                                                        o_activation, torch.nn.Linear(3072, 1024, device=device),
+                                                        o_activation, torch.nn.Linear(1024, 512, device=device),
+                                                        drop, o_activation, torch.nn.Linear(512, 1, device=device))
         def image_model(self, images):
             # Returns outputs of NNs with input of multiple images
             samples = []
@@ -162,10 +192,7 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, d
         def word_model(self, words):
             # Returns the output of a NN with an input of two words
             x = self.w_embeddings(words.to(device))
-            x = self.linear1(x)
-            x = self.tanh(x)
-            x = self.linear2(x)
-            x = self.tanh(x)
+            x = self.w_sequential(x)
             return x
         def forward(self, words, images):
             # Networks to be used for the images of the dataset
@@ -182,14 +209,10 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, d
                     x = torch.cat((img.unsqueeze(0), w_seq[i])).to(device)
                     samps.append(x.flatten())
                 out_tensor.append(torch.stack(samps).to(device))
-            out = self.linear3(torch.stack(out_tensor).to(device))
-            out = self.relu(out)
-            out = self.drop(out)
-            out = self.linear4(out).squeeze(2)
-            # out = self.softmax(out).to(device)
+            out = self.o_sequential(torch.stack(out_tensor).to(device)).squeeze(2)
             # print("forward output: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
             return out
-    
+
     model = Model(data_dir, img_path).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
     # loss_fnc = torch.nn.NLLLoss()
@@ -198,9 +221,6 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, d
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     print('{} - lr{} batchsize{} epochs{} train_size{} dev_size{}'.format(
         timestamp, learning_rate, batch_size, epochs, len(train_data), len(dev_data)))
-    model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
-        timestamp, round(learning_rate, 7), batch_size, epochs, len(train_data))
-    os.mkdir(model_dir)
     for e in range(epochs):
         batches = pre.getBatches(train_data, batch_size)
         vbatches = pre.getBatches(dev_data, batch_size) # validation data split into batches
@@ -220,6 +240,9 @@ def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, d
         # Track best performance, and save the model's state
         if val_acc > 0.70:  # Only save model if it is greater than 50% accuracy on the dev set
             print('saving model')
+            model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
+            timestamp, round(learning_rate, 7), batch_size, epochs, len(train_data))
+            os.mkdir(model_dir)
             model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
             torch.save(model.state_dict(), model_path)
     return
@@ -266,7 +289,7 @@ def evaluate(model_dir, data_dir, test_dir, step_size):
     else:
         train_data, dev_data = pre.preprocessData(data_dir)
         img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
-        model = md.Model(data_dir, img_path).to(device)
+        model = Model(data_dir, img_path).to(device)
         model.load_state_dict(torch.load(model_dir))
         model.eval()
         # Evaluate on the training data
@@ -295,6 +318,10 @@ if __name__ == "__main__":
     train_parser.add_argument("--dropout", type=float, default=0.25)
     train_parser.add_argument("--train_size", type=int, default=1000000)
     train_parser.add_argument("--dev_size", type=int, default=1000000)
+    train_parser.add_argument("--word_linears", type=int, default=2)
+    train_parser.add_argument("--word_activations", type=str, default='tanh')
+    train_parser.add_argument("--out_linears", type=int, default=2)
+    train_parser.add_argument("--out_activations", type=str, default='relu')
     predict_parser = subparsers.add_parser("evaluate")
     predict_parser.set_defaults(func=evaluate)
     predict_parser.add_argument("model_dir")
