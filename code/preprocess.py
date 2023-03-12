@@ -28,7 +28,7 @@ def readYData(data_dir):
         data = fi.read().split('\n')
     return data[0:-1]
 
-def preprocessData(data_dir, train_size, dev_size):
+def preprocessData(data_dir, train_size, dev_size, rand = 162):
     # Read the training data from "data_dir"
     # Reading the text data
     X = readXData(glob.glob(data_dir + '/*train*/*data*')[0])
@@ -38,7 +38,7 @@ def preprocessData(data_dir, train_size, dev_size):
     y = readYData(glob.glob(data_dir + '/*train*/*gold*')[0])
     # split the rows into training and dev data randomly
     x_train, x_dev, y_train, y_dev = train_test_split(X,y,
-                                   random_state=162,
+                                   random_state=rand,
                                    test_size=0.2,
                                    shuffle=True)
     # for development purposes, cut the number of samples

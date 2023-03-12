@@ -19,13 +19,15 @@ import datetime
 import os
 import wandb
 import preprocess as pre
+import model as md
+
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if torch.cuda.is_available():
     print("USING GPU")
 
 def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_size,
-                   word_linears, word_activations, out_linears, out_activations):
+                   word_linears, word_activations, out_linears, out_activations, seed):
     # start a new wandb run to track this script
     wandb.init(
         # set the wandb project where this run will be logged
@@ -42,7 +44,8 @@ def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_s
         'word_linears': word_linears,
         'word_activations': word_activations,
         'out_linears': out_linears,
-        'out_activations': out_activations
+        'out_activations': out_activations,
+        'random_seed': seed
         }
     )
 
@@ -127,93 +130,16 @@ def eval_epoch(vbatches, model, loss_fnc):
     return running_vloss / (i + 1) , correct / total
 
 def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
-          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu'):
+          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22):
     """
     Train the model on the given training dataset located at "data_dir".
     """
     train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
     configureWandB(learning_rate, batch_size, epochs, dropout, len(train_data), len(dev_data),
-                   word_linears, word_activations, out_linears, out_activations)
+                   word_linears, word_activations, out_linears, out_activations, seed)
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
-    class Model(torch.nn.Module):
-        def __init__(self, data_dir, img_path):
-            super(Model, self).__init__()
-            self.img_path = img_path
-            self.w_embeddings = emb.wordEmbeddingLayer(data_dir)
-            i_weights = models.ResNet50_Weights.IMAGENET1K_V2
-            res50 = models.resnet50(weights=i_weights)
-            layers = list(res50._modules.keys())
-            # Want to remove the final linear layer of ResNet50
-            self.i_pretrained = torch.nn.Sequential(*[res50._modules[x] for x in layers[:-1]])
-            self.i_pretrained.train()
-            self.i_preprocess = i_weights.transforms()
-            res50 = None
-            i_weights = None
-            layers = None
-            w_activation = torch.nn.ReLU() if wandb.config['word_activations'] == 'relu' else torch.nn.Tanh()
-            if wandb.config['word_linears'] == 1:
-                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 2048, device=device), w_activation)
-            elif wandb.config['word_linears'] == 2:
-                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
-                                                        torch.nn.Linear(512, 2048, device=device), w_activation)
-            elif wandb.config['word_linears'] == 3:
-                self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
-                                                        torch.nn.Linear(512, 1024, device=device), w_activation,
-                                                        torch.nn.Linear(1024, 2048, device=device), w_activation)
-            
-            o_activation = torch.nn.ReLU() if wandb.config['out_activations'] == 'relu' else torch.nn.Tanh()
-            drop = torch.nn.Dropout(p=wandb.config['dropout'])
-            if wandb.config['out_linears'] == 1:
-                self.o_sequential = torch.nn.Sequential(drop, torch.nn.Linear(6144, 1, device=device))
-            elif wandb.config['out_linears'] == 2:
-                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
-                                                        o_activation, torch.nn.Linear(3072, 1, device=device))
-            elif wandb.config['out_linears'] == 3:
-                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
-                                                        o_activation, torch.nn.Linear(3072, 1024, device=device),
-                                                        o_activation, torch.nn.Linear(1024, 1, device=device))
-            elif wandb.config['out_linears'] == 4:
-                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
-                                                        o_activation, torch.nn.Linear(3072, 1024, device=device),
-                                                        o_activation, torch.nn.Linear(1024, 512, device=device),
-                                                        drop, o_activation, torch.nn.Linear(512, 1, device=device))
-        def image_model(self, images):
-            # Returns outputs of NNs with input of multiple images
-            samples = []
-            for n, row in enumerate(images):
-                seqs = []
-                for i in row:
-                    img = Image.open(self.img_path + i).convert('RGB')
-                    batch = self.i_preprocess(img).unsqueeze(0).to(device)
-                    x = self.i_pretrained(batch).to(device)
-                    seqs.append(x.flatten())
-                samples.append(torch.stack(seqs).to(device))
-            return torch.stack(samples).to(device)
-        def word_model(self, words):
-            # Returns the output of a NN with an input of two words
-            x = self.w_embeddings(words.to(device))
-            x = self.w_sequential(x)
-            return x
-        def forward(self, words, images):
-            # Networks to be used for the images of the dataset
-            i_seqs = self.image_model(images)
-            # print("images pretrained: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
-            # Network to be used for the words of the dataset
-            w_seq = self.word_model(words)
-            # print("words and images pretrained: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
-            # Combining the word and image tensors
-            out_tensor = []
-            for i, sample in enumerate(i_seqs):
-                samps = []
-                for img in sample:
-                    x = torch.cat((img.unsqueeze(0), w_seq[i])).to(device)
-                    samps.append(x.flatten())
-                out_tensor.append(torch.stack(samps).to(device))
-            out = self.o_sequential(torch.stack(out_tensor).to(device)).squeeze(2)
-            # print("forward output: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
-            return out
-
-    model = Model(data_dir, img_path).to(device)
+    np.random.seed(seed)
+    model = md.Model(data_dir, img_path).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
     # loss_fnc = torch.nn.NLLLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -322,6 +248,7 @@ if __name__ == "__main__":
     train_parser.add_argument("--word_activations", type=str, default='tanh')
     train_parser.add_argument("--out_linears", type=int, default=2)
     train_parser.add_argument("--out_activations", type=str, default='relu')
+    train_parser.add_argument("--seed", type=int, default=22)
     predict_parser = subparsers.add_parser("evaluate")
     predict_parser.set_defaults(func=evaluate)
     predict_parser.add_argument("model_dir")
