@@ -27,7 +27,7 @@ if torch.cuda.is_available():
     print("USING GPU")
 
 def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_size,
-                   word_linears, word_activations, out_linears, out_activations, seed):
+                   word_linears, word_activations, out_linears, out_activations, seed, early_stop):
     # start a new wandb run to track this script
     wandb.init(
         # set the wandb project where this run will be logged
@@ -45,7 +45,8 @@ def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_s
         'word_activations': word_activations,
         'out_linears': out_linears,
         'out_activations': out_activations,
-        'random_seed': seed
+        'random_seed': seed,
+        'early_stop': early_stop
         }
     )
 
@@ -129,48 +130,58 @@ def eval_epoch(vbatches, model, loss_fnc):
     outputs = None
     return running_vloss / (i + 1) , correct / total
 
-def train(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
-          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22):
+def train(model_dir, data_dir, train_data, dev_data):
     """
     Train the model on the given training dataset located at "data_dir".
     """
-    train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
-    configureWandB(learning_rate, batch_size, epochs, dropout, len(train_data), len(dev_data),
-                   word_linears, word_activations, out_linears, out_activations, seed)
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
-    np.random.seed(seed)
+    np.random.seed(wandb.config.seed)
     model = md.Model(data_dir, img_path).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
     # loss_fnc = torch.nn.NLLLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    best_vloss = 1_000_000.
+    optimizer = torch.optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
+    best_v_acc = 0.0
+    best_num_epochs = 0
+    count = 0
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     print('{} - lr{} batchsize{} epochs{} train_size{} dev_size{}'.format(
-        timestamp, learning_rate, batch_size, epochs, len(train_data), len(dev_data)))
-    for e in range(epochs):
-        batches = pre.getBatches(train_data, batch_size)
-        vbatches = pre.getBatches(dev_data, batch_size) # validation data split into batches
+        timestamp, wandb.config.learning_rate, wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size, wandb.config.dev_size))
+    for e in range(wandb.config.epochs):
+        batches = pre.getBatches(train_data, wandb.config.batch_size)
+        vbatches = pre.getBatches(dev_data, wandb.config.batch_size) # validation data split into batches
         # Make sure gradient tracking is on, and do a pass over the data
         avg_loss = None
         accuracy = 0
         avg_loss, accuracy = train_epoch(e, batches, model, loss_fnc, optimizer)
-        wandb.log({"train_acc": accuracy, "train_loss": avg_loss})
         model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e+1)
         val_loss = None
         val_acc = 0
         val_loss, val_acc = eval_epoch(vbatches, model, loss_fnc)
-        wandb.log({"val_acc": val_acc, "val_loss": val_loss})
+        wandb.log({"epoch": e, "train_acc": accuracy, "train_loss": avg_loss, "val_acc": val_acc, "val_loss": val_loss})
         print('Loss:\t\ttrain {}\tvalidation {}'.format(round(avg_loss,2), round(val_loss,2)))
         print('Accuracy:\ttrain {}%\tvalidation {}%'.format(round(100*accuracy,2), round(val_acc,2)))
 
         # Track best performance, and save the model's state
-        if val_acc > 0.70:  # Only save model if it is greater than 50% accuracy on the dev set
+        if val_acc > 0.50 and val_acc >= best_v_acc:  # Only save model if it is greater than 50% accuracy on the dev set
             print('saving model')
             model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
-            timestamp, round(learning_rate, 7), batch_size, epochs, len(train_data))
+            timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size)
             os.mkdir(model_dir)
+            print('Model dir: {}'.format(model_dir))
             model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
             torch.save(model.state_dict(), model_path)
+
+        # early stopping
+        if val_acc > best_v_acc:
+            best_v_acc = val_acc
+            best_num_epochs = e
+            count = 0
+        else:
+            count += 1
+            if count >= wandb.config.early_stop:
+                print("Early stopping initiated after {} consecutive epochs below the best validation accuracy.".format(count))
+                break
+    wandb.log({"best_val_acc": best_v_acc, "best_num_epochs": best_num_epochs})
     return
 
 
@@ -228,14 +239,21 @@ def evaluate(model_dir, data_dir, test_dir, step_size):
               "Development Data: {} correct predictions out of {} ({} %)".format(dcorrect, len(dev_data), 100*dcorrect/len(dev_data)))
     return
 
-
+def main(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
+          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5):
+    train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
+    configureWandB(learning_rate=learning_rate, batch_size=batch_size, epochs=epochs, dropout=dropout, train_size=len(train_data),
+                   dev_size=len(dev_data), word_linears=word_linears, word_activations=word_activations, out_linears=out_linears,
+                   out_activations=out_activations, seed=seed, early_stop=early_stop)
+    train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data)
+    return
 
 if __name__ == "__main__":
     # sets up a command-line interface for "train" and "predict"
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(required=True)
     train_parser = subparsers.add_parser("train")
-    train_parser.set_defaults(func=train)
+    train_parser.set_defaults(func=main)
     train_parser.add_argument("model_dir")
     train_parser.add_argument("data_dir")
     train_parser.add_argument("--epochs", type=int, default=10)
@@ -249,6 +267,7 @@ if __name__ == "__main__":
     train_parser.add_argument("--out_linears", type=int, default=2)
     train_parser.add_argument("--out_activations", type=str, default='relu')
     train_parser.add_argument("--seed", type=int, default=22)
+    train_parser.add_argument("--early_stop", type=int, default=100)
     predict_parser = subparsers.add_parser("evaluate")
     predict_parser.set_defaults(func=evaluate)
     predict_parser.add_argument("model_dir")
