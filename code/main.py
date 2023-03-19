@@ -19,15 +19,16 @@ import datetime
 import os
 import wandb
 import preprocess as pre
-import model as md
-
+import copy
+import json
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if torch.cuda.is_available():
     print("USING GPU")
 
 def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_size,
-                   word_linears, word_activations, out_linears, out_activations, seed, early_stop):
+                   word_linears, word_activations, out_linears, out_activations, seed,
+                   early_stop, model):
     # start a new wandb run to track this script
     wandb.init(
         # set the wandb project where this run will be logged
@@ -35,18 +36,21 @@ def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_s
         
         # track hyperparameters and run metadata
         config={
-        "learning_rate": learning_rate,
-        "batch_size": batch_size,
-        "epochs": epochs,
-        "dropout": dropout,
-        "train_size": train_size,
-        "dev_size": dev_size,
-        'word_linears': word_linears,
-        'word_activations': word_activations,
-        'out_linears': out_linears,
-        'out_activations': out_activations,
-        'random_seed': seed,
-        'early_stop': early_stop
+            "learning_rate": learning_rate,
+            "batch_size": batch_size,
+            "epochs": epochs,
+            "train_size": train_size,
+            "dev_size": dev_size,
+            'random_seed': seed,
+            'early_stop': early_stop,
+            'model_config': {
+                'model': model,
+                'word_linears': word_linears,
+                'word_activations': word_activations,
+                'out_linears': out_linears,
+                "dropout": dropout,
+                'out_activations': out_activations
+            }
         }
     )
 
@@ -86,11 +90,10 @@ def train_epoch(e, batches, model, loss_fnc, optimizer):
         actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))]).to(device)
         correct += int(sum(predictions == actual))
         total += len(predictions)
+        print('{} out of {} correctly predicted:'.format(correct, total))
         # argmax function on the outputs
         # Compute the loss and its gradients
         loss = loss_fnc(outputs, actual.type(torch.LongTensor).to(device)).to(device)
-        print('out:\t{}'.format(outputs[0:3]))
-        print('actual:\t{}'.format(actual[0:3]))
         loss.backward()
 
         # Adjust learning weights
@@ -120,10 +123,9 @@ def eval_epoch(vbatches, model, loss_fnc):
         actual = torch.Tensor([np.where(vimages[n] == vlabels[n])[0][0] for n in range(len(vimages))]).to(device)
         correct += int(sum(predictions == actual))
         total += len(predictions)
+        print('{} out of {} correctly predicted:'.format(correct, total))
         # argmax function on the outputs
         vloss = float(loss_fnc(outputs, actual.type(torch.LongTensor).to(device)))
-        print('out:\t{}'.format(outputs[0:3]))
-        print('actual:\t{}'.format(actual[0:3]))
         running_vloss += vloss
         print('Batch {} out of {}: Average Loss is {}, Accuracy is {}%'.format(
             i+1, len(vbatches), round(running_vloss / (i+1),3), round(100*correct / total,2)))
@@ -134,9 +136,21 @@ def train(model_dir, data_dir, train_data, dev_data):
     """
     Train the model on the given training dataset located at "data_dir".
     """
+
+    np.random.seed(wandb.config.random_seed)
+
+    if wandb.config.model_config['model'] == 'model1':
+        import model1 as md
+        print('Using model1.py for the model.')
+    elif wandb.config.model_config['model'] == 'model2':
+        import model2 as md
+        print('Using model2.py for the model.')
+    else:
+        import model as md
+        print('Using model.py for the model.')
+
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
-    np.random.seed(wandb.config.seed)
-    model = md.Model(data_dir, img_path).to(device)
+    model = md.Model(data_dir, img_path, wandb.config.model_config).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
     # loss_fnc = torch.nn.NLLLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
@@ -159,22 +173,24 @@ def train(model_dir, data_dir, train_data, dev_data):
         val_loss, val_acc = eval_epoch(vbatches, model, loss_fnc)
         wandb.log({"epoch": e, "train_acc": accuracy, "train_loss": avg_loss, "val_acc": val_acc, "val_loss": val_loss})
         print('Loss:\t\ttrain {}\tvalidation {}'.format(round(avg_loss,2), round(val_loss,2)))
-        print('Accuracy:\ttrain {}%\tvalidation {}%'.format(round(100*accuracy,2), round(val_acc,2)))
+        print('Accuracy:\ttrain {}%\tvalidation {}%'.format(round(100*accuracy,2), round(100*val_acc,2)))
 
         # Track best performance, and save the model's state
-        if val_acc > 0.50 and val_acc >= best_v_acc:  # Only save model if it is greater than 50% accuracy on the dev set
-            print('saving model')
-            model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
-            timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size)
-            os.mkdir(model_dir)
-            print('Model dir: {}'.format(model_dir))
-            model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
-            torch.save(model.state_dict(), model_path)
+        # if val_acc > 0.22 and val_acc >= best_v_acc:  # Only save model if it is greater than 22% accuracy on the dev set
+        #     print('saving model')
+        #     model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
+        #     timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size)
+        #     os.mkdir(model_dir)
+        #     print('Model dir: {}'.format(model_dir))
+        #     model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
+        #     torch.save(model.state_dict(), model_path)
 
         # early stopping
         if val_acc > best_v_acc:
             best_v_acc = val_acc
             best_num_epochs = e
+            best_model = None
+            best_model = copy.deepcopy(model.state_dict())
             count = 0
         else:
             count += 1
@@ -182,23 +198,41 @@ def train(model_dir, data_dir, train_data, dev_data):
                 print("Early stopping initiated after {} consecutive epochs below the best validation accuracy.".format(count))
                 break
     wandb.log({"best_val_acc": best_v_acc, "best_num_epochs": best_num_epochs})
+    print('saving model')
+    model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
+    timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size)
+    os.mkdir(model_dir)
+    print('Model dir: {}'.format(model_dir))
+    model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
+    config_path = model_dir + '/' + 'config_{}_{}.json'.format(timestamp, e)
+    torch.save(best_model, model_path)
+    with open(config_path, "w") as outfile:
+        outfile.write(json.dumps(wandb.config.model_config, indent=4))
     return
 
 
 def predict(index, model, words, tokens, images, labels):
     outputs = model.forward(tokens, images)
     softmax = torch.nn.Softmax(dim=1)
-    predictions = torch.argmax(softmax(outputs), dim=1)
+    outputs = softmax(outputs)
+    predictions = torch.argmax(outputs, dim=1)
+    outputs = outputs.detach().numpy()
     actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))])
     correct = 0
     for i, p in enumerate(predictions):
         if predictions[i] == actual[i]:
             correct += 1
-            print("CORRECT:\t{}. {} {}\t| Predicted: ({}) {}\t| Actual: ({}) {}".format(
+            print("CORRECT:\t{}. {} {}\t| Predicted: ({}) {}\t| Answer: ({}) {}".format(
                     index + i, words[i][0], words[i][1], p, images[i][p], int(actual[i]), labels[i]))
         else:
-            print("INCORRECT:\t{}. {} {}\t| Predicted: ({}) {}\t| Actual: ({}) {}".format(
+            print("INCORRECT:\t{}. {} {}\t| Predicted: ({}) {}\t| Answer: ({}) {}".format(
                     index + i, words[i][0], words[i][1], p, images[i][p], int(actual[i]), labels[i]))
+        top_3 = outputs[i].argsort()[-3:][::-1]
+        c = ['*' if t == int(actual[i]) else '' for t in top_3]
+        print("Top 3:\t1. ({}) {}{}, {}%\t2. ({}) {}{}, {}%\t3. ({}) {}{}, {}%\n".format(
+                top_3[0], images[i][top_3[0]], c[0], round(100*outputs[i][top_3[0]],2),
+                top_3[1], images[i][top_3[1]], c[1], round(100*outputs[i][top_3[1]],2),
+                top_3[2], images[i][top_3[2]], c[2], round(100*outputs[i][top_3[2]],2)))
     return correct
 
 def evaluate_dataset(data_dir, data, model, step_size):
@@ -215,7 +249,18 @@ def evaluate_dataset(data_dir, data, model, step_size):
         correct += predict(i, model, words, tokens, images, labels)
     return correct
 
-def evaluate(model_dir, data_dir, test_dir, step_size):
+def evaluate(model_dir, data_dir, test_dir, step_size, train_size, dev_size):
+    model_config = json.load(open(glob.glob(model_dir + '/*config*')[0],'r'))
+    if model_config['model'] == 'model1':
+        import model1 as md
+        print('Using model1.py for the evaluation.')
+    elif model_config['model'] == 'model2':
+        import model2 as md
+        print('Using model2.py for the evaluation.')
+    else:
+        import model as md
+        print('Using model.py for the evaluation.')
+
     if test_dir is not None:
         img_path = glob.glob(test_dir + '/*images*/')[0]
         X = pre.readXData(glob.glob(test_dir + '/*data*')[0])
@@ -224,10 +269,10 @@ def evaluate(model_dir, data_dir, test_dir, step_size):
             X[i][0:2] = tokens[i]
         y = pre.readYData(glob.glob(test_dir + '/*gold*')[0])
     else:
-        train_data, dev_data = pre.preprocessData(data_dir)
+        train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
         img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
-        model = Model(data_dir, img_path).to(device)
-        model.load_state_dict(torch.load(model_dir))
+        model = md.Model(data_dir, img_path, model_config).to(device)
+        model.load_state_dict(torch.load(glob.glob(model_dir + '/*model*')[0]))
         model.eval()
         # Evaluate on the training data
         print("Training Data evaluation")
@@ -235,16 +280,16 @@ def evaluate(model_dir, data_dir, test_dir, step_size):
         # Evaluate on the dev set
         print("Development Data evaluation")
         dcorrect = evaluate_dataset(data_dir, dev_data, model, step_size)
-        print("Training Data: {} correct predictions out of {} ({} %)\n".format(tcorrect, len(train_data), 100*tcorrect/len(train_data)) +
-              "Development Data: {} correct predictions out of {} ({} %)".format(dcorrect, len(dev_data), 100*dcorrect/len(dev_data)))
+        print("Training Data: {} correct predictions out of {} ({} %)\n".format(tcorrect, len(train_data), round(100*tcorrect/len(train_data),2)) +
+              "Development Data: {} correct predictions out of {} ({} %)".format(dcorrect, len(dev_data), round(100*dcorrect/len(dev_data),2)))
     return
 
 def main(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
-          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5):
+          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5, model='model'):
     train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
     configureWandB(learning_rate=learning_rate, batch_size=batch_size, epochs=epochs, dropout=dropout, train_size=len(train_data),
                    dev_size=len(dev_data), word_linears=word_linears, word_activations=word_activations, out_linears=out_linears,
-                   out_activations=out_activations, seed=seed, early_stop=early_stop)
+                   out_activations=out_activations, seed=seed, early_stop=early_stop, model=model)
     train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data)
     return
 
@@ -262,18 +307,22 @@ if __name__ == "__main__":
     train_parser.add_argument("--dropout", type=float, default=0.25)
     train_parser.add_argument("--train_size", type=int, default=1000000)
     train_parser.add_argument("--dev_size", type=int, default=1000000)
-    train_parser.add_argument("--word_linears", type=int, default=2)
+    train_parser.add_argument("--word_linears", type=int, default=1)
     train_parser.add_argument("--word_activations", type=str, default='tanh')
     train_parser.add_argument("--out_linears", type=int, default=2)
     train_parser.add_argument("--out_activations", type=str, default='relu')
     train_parser.add_argument("--seed", type=int, default=22)
     train_parser.add_argument("--early_stop", type=int, default=100)
+    train_parser.add_argument("--model", type=str, default='model')
+    
     predict_parser = subparsers.add_parser("evaluate")
     predict_parser.set_defaults(func=evaluate)
     predict_parser.add_argument("model_dir")
     predict_parser.add_argument("data_dir")
     predict_parser.add_argument("--test_dir", type=str, default=None)
     predict_parser.add_argument("--step_size", type=int, default=2)
+    predict_parser.add_argument("--train_size", type=int, default=1000000)
+    predict_parser.add_argument("--dev_size", type=int, default=1000000)
     args = parser.parse_args()
     kwargs = vars(args)
     kwargs.pop("func")(**kwargs)

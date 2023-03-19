@@ -1,20 +1,14 @@
 import argparse
-import glob
 import torchvision.models as models
 import torch
-import embeddings as emb
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-import datetime
-import os
-import numpy as np
 import wandb
 wandb.login()
 import preprocess as pre
 import main as mn
-import model as md
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -24,14 +18,17 @@ default_config = {
     "epochs": 3,
     "train_size": 500,
     "dev_size": 200,
-    "dropout": 0.25,
-    'word_linears': 1,
-    'word_activations': 'tanh',
-    'out_linears': 2,
-    'out_activations': 'relu',
     'random_seed': 22,
-    'early_stop': 1000
+    'early_stop': 1000,
+    'model_config': {
+        'model' : 'model0',
+        'dropout': 0.25,
+        'word_linears': 1,
+        'word_activations': 'tanh',
+        'out_linears': 2,
+        'out_activations': 'relu'
     }
+}
 
 def main():
     model_dir = "../models_data"
@@ -55,6 +52,8 @@ if __name__ == "__main__":
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--train_size", type=int, default=1000000)
     parser.add_argument("--dev_size", type=int, default=1000000)
+    parser.add_argument("--model", type=str, default='model0')
+    
     args = parser.parse_args()
     kwargs = vars(args)
     default_config['epochs'] = kwargs['epochs']
@@ -64,7 +63,8 @@ if __name__ == "__main__":
     default_config['train_size'] = kwargs['train_size']
     default_config['dev_size'] = kwargs['dev_size']
     default_config['dropout'] = kwargs['dropout']
-    
+    default_config['model'] = kwargs['model_config']['model']
+
     if kwargs['sweep_id'] is not None:
         sweep_id = kwargs['sweep_id']
     else:
@@ -77,7 +77,7 @@ if __name__ == "__main__":
             },
         'parameters': {
             'dropout': {'max': 0.5, 'min': 0.10},
-            'learning_rate': {'max': 0.0006, 'min': 0.0004},
+            'learning_rate': {'max': 0.0004, 'min': 0.00004},
             'random_seed': {'max' : 1000, 'min': 0}
             }
         }

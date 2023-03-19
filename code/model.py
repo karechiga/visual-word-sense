@@ -6,13 +6,12 @@ from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-import wandb
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class Model(torch.nn.Module):
-    def __init__(self, data_dir, img_path):
+    def __init__(self, data_dir, img_path, config):
         super(Model, self).__init__()
         self.img_path = img_path
         self.w_embeddings = emb.wordEmbeddingLayer(data_dir)
@@ -26,29 +25,29 @@ class Model(torch.nn.Module):
         res50 = None
         i_weights = None
         layers = None
-        w_activation = torch.nn.ReLU() if wandb.config['word_activations'] == 'relu' else torch.nn.Tanh()
-        if wandb.config['word_linears'] == 1:
-            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 2048, device=device), w_activation)
-        elif wandb.config['word_linears'] == 2:
-            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
+        w_activation = torch.nn.ReLU() if config['word_activations'] == 'relu' else torch.nn.Tanh()
+        if config['word_linears'] == 1:
+            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(50, 2048, device=device), w_activation)
+        elif config['word_linears'] == 2:
+            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(50, 512, device=device), w_activation,
                                                     torch.nn.Linear(512, 2048, device=device), w_activation)
-        elif wandb.config['word_linears'] == 3:
-            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
+        elif config['word_linears'] == 3:
+            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(50, 512, device=device), w_activation,
                                                     torch.nn.Linear(512, 1024, device=device), w_activation,
                                                     torch.nn.Linear(1024, 2048, device=device), w_activation)
         
-        o_activation = torch.nn.ReLU() if wandb.config['out_activations'] == 'relu' else torch.nn.Tanh()
-        drop = torch.nn.Dropout(p=wandb.config['dropout'])
-        if wandb.config['out_linears'] == 1:
+        o_activation = torch.nn.ReLU() if config['out_activations'] == 'relu' else torch.nn.Tanh()
+        drop = torch.nn.Dropout(p=config['dropout'])
+        if config['out_linears'] == 1:
             self.o_sequential = torch.nn.Sequential(drop, torch.nn.Linear(6144, 1, device=device))
-        elif wandb.config['out_linears'] == 2:
+        elif config['out_linears'] == 2:
             self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
                                                     o_activation, torch.nn.Linear(3072, 1, device=device))
-        elif wandb.config['out_linears'] == 3:
+        elif config['out_linears'] == 3:
             self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
                                                     o_activation, torch.nn.Linear(3072, 1024, device=device),
                                                     o_activation, torch.nn.Linear(1024, 1, device=device))
-        elif wandb.config['out_linears'] == 4:
+        elif config['out_linears'] == 4:
             self.o_sequential = torch.nn.Sequential(torch.nn.Linear(6144, 3072, device=device), drop,
                                                     o_activation, torch.nn.Linear(3072, 1024, device=device),
                                                     o_activation, torch.nn.Linear(1024, 512, device=device),
