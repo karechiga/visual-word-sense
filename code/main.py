@@ -54,83 +54,53 @@ def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_s
         }
     )
 
-# def plotPerformance(losses, accs):
-#     ax1 = plt.subplot(211)
-#     ax2 = plt.subplot(212)
-#     for i in range(len(losses)):
-#         ax1.plot(np.arange(1,len(losses[i])+1), losses[i], ':')
-#         ax1.set_xticks(np.arange(1,len(losses[0])+1, 2))
-#     for i in range(len(accs)):
-#         ax2.plot(np.arange(1,len(accs[i])+1), accs[i], ':')
-#         ax2.set_xticks(np.arange(1,len(accs[0])+1, 2))
-#     ax1.set_ylim(bottom=0)
-#     ax2.set_ylim([0, 100])
-#     ax1.set_ylabel('Cross Entropy Loss')
-#     ax2.set_ylabel('Model Accuracy (%)')
-#     return ax1, ax2
-
-def train_epoch(e, batches, model, loss_fnc, optimizer):
-    model.train(True)
-    running_loss = 0.
-    correct = 0
-    total = 0
-    for i, data in enumerate(batches):
-        print('EPOCH {}: Batch {} out of {}'.format(e + 1, i+1, len(batches)))
-        # Every data instance is an input + label pair
-        words, images, labels = data
-
-        # Zero your gradients for every batch!
+def run_batch(batch, model, training = False, loss_fnc = None, optimizer = None, sample_num = 0):
+    model.train(training)
+    if training == True:
         optimizer.zero_grad()
-
-        # Make predictions for this batch
-        outputs = None
-        outputs = model.forward(words, images)
-        softmax = torch.nn.Softmax(dim=1)
-        predictions = torch.argmax(softmax(outputs), dim=1)
-        actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))]).to(device)
-        correct += int(sum(predictions == actual))
-        total += len(predictions)
-        print('{} out of {} correctly predicted:'.format(correct, total))
-        # argmax function on the outputs
-        # Compute the loss and its gradients
+    tokens, images, labels, words = batch
+    outputs = model.forward(tokens, images)
+    softmax = torch.nn.Softmax(dim=1)
+    predictions = torch.argmax(softmax(outputs), dim=1)
+    actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))]).to(device)
+    if words is not None:
+        output_predictions(index=sample_num, words=words, images=images,
+                           outputs=softmax(outputs).cpu().detach().numpy(), predictions=predictions,
+                           answers=actual, labels=labels)
+    correct = int(sum(predictions == actual))
+    total = len(predictions)
+    print('{} out of {} ({}%) correctly predicted:'.format(correct, total, round(100*correct/total,2)))
+    l = 0
+    if loss_fnc is not None:
+        # Compute the loss
         loss = loss_fnc(outputs, actual.type(torch.LongTensor).to(device)).to(device)
+        l = float(loss.item())
+    if training == True:
+        # Compute gradients
         loss.backward()
-
         # Adjust learning weights
         optimizer.step()
+    return correct, total, l
 
-        # Gather data and report
-        running_loss += float(loss.item())
-        print('EPOCH {}: Batch {} out of {}: Average Loss is {}, Accuracy is {}%'.format(
-            e + 1, i+1, len(batches), round(running_loss / (i+1),3), round(100*correct / total,2)))
-    return running_loss / len(batches), correct / total
-
-def eval_epoch(vbatches, model, loss_fnc):
-    # We don't need gradients on to do reporting
-    model.train(False)
-    running_vloss = 0.0
+def run_epoch(e, batches, model, training = False, loss_fnc = None, optimizer = None):
+    running_loss = 0
     correct = 0
     total = 0
-    for i, vdata in enumerate(vbatches):
-        print("Validation loop {}".format(i+1))
-        outputs = None
-        # print(torch.cuda.memory_summary(device=None, abbreviated=False))
-        vwords, vimages, vlabels = vdata
-        outputs = model.forward(vwords, vimages).to(device)
-        # print(torch.cuda.memory_summary(device=None, abbreviated=False))
-        softmax = torch.nn.Softmax(dim=1)
-        predictions = torch.argmax(softmax(outputs), dim=1)
-        actual = torch.Tensor([np.where(vimages[n] == vlabels[n])[0][0] for n in range(len(vimages))]).to(device)
-        correct += int(sum(predictions == actual))
-        total += len(predictions)
-        print('{} out of {} correctly predicted:'.format(correct, total))
-        # argmax function on the outputs
-        vloss = float(loss_fnc(outputs, actual.type(torch.LongTensor).to(device)))
-        running_vloss += vloss
-        print('Batch {} out of {}: Average Loss is {}, Accuracy is {}%'.format(
-            i+1, len(vbatches), round(running_vloss / (i+1),3), round(100*correct / total,2)))
-    outputs = None
-    return running_vloss / (i + 1) , correct / total
+    string = 'TRAINING: ' if training == True else 'EVALUATION: '
+    for i, batch in enumerate(batches):
+        print(string + 'EPOCH {}: Batch {} out of {}'.format(e + 1, i+1, len(batches)))
+        c, t, l = run_batch(batch, model, training=training, loss_fnc=loss_fnc, optimizer=optimizer, sample_num=total)
+        # Gather data and report
+        correct += c
+        total += t
+        running_loss += l
+        if loss_fnc is not None:
+            print('Average Loss is {}, Overall Accuracy is {}/{} ({}%)\n'.format(
+                round(running_loss / (i+1),3), correct, total, round(100*correct / total,2)))
+        else:
+            print('Overall Accuracy is {}/{} ({}%)\n'.format(
+                correct, total, round(100*correct / total,2)))
+    return running_loss / len(batches), correct/total
 
 def train(model_dir, data_dir, train_data, dev_data):
     """
@@ -152,11 +122,8 @@ def train(model_dir, data_dir, train_data, dev_data):
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
     model = md.Model(data_dir, img_path, wandb.config.model_config).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
-    # loss_fnc = torch.nn.NLLLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
-    best_v_acc = 0.0
-    best_num_epochs = 0
-    count = 0
+    best_v_acc = 0.0; best_num_epochs = 0; count = 0
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     print('{} - lr{} batchsize{} epochs{} train_size{} dev_size{}'.format(
         timestamp, wandb.config.learning_rate, wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size, wandb.config.dev_size))
@@ -164,26 +131,13 @@ def train(model_dir, data_dir, train_data, dev_data):
         batches = pre.getBatches(train_data, wandb.config.batch_size)
         vbatches = pre.getBatches(dev_data, wandb.config.batch_size) # validation data split into batches
         # Make sure gradient tracking is on, and do a pass over the data
-        avg_loss = None
-        accuracy = 0
-        avg_loss, accuracy = train_epoch(e, batches, model, loss_fnc, optimizer)
-        model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e+1)
-        val_loss = None
-        val_acc = 0
-        val_loss, val_acc = eval_epoch(vbatches, model, loss_fnc)
+        avg_loss = None; accuracy = 0
+        avg_loss, accuracy = run_epoch(e=e, batches=batches, model=model, training=True, loss_fnc=loss_fnc, optimizer=optimizer)
+        val_loss = None; val_acc = 0
+        val_loss, val_acc = run_epoch(e=e, batches=vbatches, model=model, loss_fnc=loss_fnc)
         wandb.log({"epoch": e, "train_acc": accuracy, "train_loss": avg_loss, "val_acc": val_acc, "val_loss": val_loss})
         print('Loss:\t\ttrain {}\tvalidation {}'.format(round(avg_loss,2), round(val_loss,2)))
         print('Accuracy:\ttrain {}%\tvalidation {}%'.format(round(100*accuracy,2), round(100*val_acc,2)))
-
-        # Track best performance, and save the model's state
-        # if val_acc > 0.22 and val_acc >= best_v_acc:  # Only save model if it is greater than 22% accuracy on the dev set
-        #     print('saving model')
-        #     model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
-        #     timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size)
-        #     os.mkdir(model_dir)
-        #     print('Model dir: {}'.format(model_dir))
-        #     model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
-        #     torch.save(model.state_dict(), model_path)
 
         # early stopping
         if val_acc > best_v_acc:
@@ -198,6 +152,7 @@ def train(model_dir, data_dir, train_data, dev_data):
                 print("Early stopping initiated after {} consecutive epochs below the best validation accuracy.".format(count))
                 break
     wandb.log({"best_val_acc": best_v_acc, "best_num_epochs": best_num_epochs})
+
     print('saving model')
     model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
     timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size)
@@ -211,43 +166,27 @@ def train(model_dir, data_dir, train_data, dev_data):
     return
 
 
-def predict(index, model, words, tokens, images, labels):
-    outputs = model.forward(tokens, images)
-    softmax = torch.nn.Softmax(dim=1)
-    outputs = softmax(outputs)
-    predictions = torch.argmax(outputs, dim=1)
-    outputs = outputs.detach().numpy()
-    actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))])
-    correct = 0
+def output_predictions(index, words, images, outputs, predictions, answers, labels):
     for i, p in enumerate(predictions):
-        if predictions[i] == actual[i]:
-            correct += 1
+        if predictions[i] == answers[i]:
             print("CORRECT:\t{}. {} {}\t| Predicted: ({}) {}\t| Answer: ({}) {}".format(
-                    index + i, words[i][0], words[i][1], p, images[i][p], int(actual[i]), labels[i]))
+                    index + i, words[i][0], words[i][1], p, images[i][p], int(answers[i]), labels[i]))
         else:
             print("INCORRECT:\t{}. {} {}\t| Predicted: ({}) {}\t| Answer: ({}) {}".format(
-                    index + i, words[i][0], words[i][1], p, images[i][p], int(actual[i]), labels[i]))
+                    index + i, words[i][0], words[i][1], p, images[i][p], int(answers[i]), labels[i]))
         top_3 = outputs[i].argsort()[-3:][::-1]
-        c = ['*' if t == int(actual[i]) else '' for t in top_3]
+        c = ['*' if t == int(answers[i]) else '' for t in top_3]
         print("Top 3:\t1. ({}) {}{}, {}%\t2. ({}) {}{}, {}%\t3. ({}) {}{}, {}%\n".format(
                 top_3[0], images[i][top_3[0]], c[0], round(100*outputs[i][top_3[0]],2),
                 top_3[1], images[i][top_3[1]], c[1], round(100*outputs[i][top_3[1]],2),
                 top_3[2], images[i][top_3[2]], c[2], round(100*outputs[i][top_3[2]],2)))
-    return correct
+    return
 
 def evaluate_dataset(data_dir, data, model, step_size):
-    train_words = emb.untokenize([x[0:2] for x in data], data_dir)
-    correct = 0
-    for i in range(0, len(data), step_size):
-        # Words input
-        tokens = torch.tensor([[eval(x[0]), eval(x[1])] for x in data[i:i+step_size]]).to(torch.int64)
-        words = train_words[i:i+step_size]
-        # Images input
-        images = [x[2:-1] for x in data[i:i+step_size]]
-        # output
-        labels = [x[-1] for x in data[i:i+step_size]]
-        correct += predict(i, model, words, tokens, images, labels)
-    return correct
+    words = emb.untokenize([x[0:2] for x in data], data_dir)
+    batches = pre.getBatches(data, step_size, rand=False, words=words)
+    loss, acc = run_epoch(0, batches, model, training = False, loss_fnc = None, optimizer = None)
+    return loss, acc
 
 def evaluate(model_dir, data_dir, test_dir, step_size, train_size, dev_size):
     model_config = json.load(open(glob.glob(model_dir + '/*config*')[0],'r'))
@@ -276,12 +215,12 @@ def evaluate(model_dir, data_dir, test_dir, step_size, train_size, dev_size):
         model.eval()
         # Evaluate on the training data
         print("Training Data evaluation")
-        tcorrect = evaluate_dataset(data_dir, train_data, model, step_size)
+        _, t_acc = evaluate_dataset(data_dir, train_data, model, step_size)
         # Evaluate on the dev set
         print("Development Data evaluation")
-        dcorrect = evaluate_dataset(data_dir, dev_data, model, step_size)
-        print("Training Data: {} correct predictions out of {} ({} %)\n".format(tcorrect, len(train_data), round(100*tcorrect/len(train_data),2)) +
-              "Development Data: {} correct predictions out of {} ({} %)".format(dcorrect, len(dev_data), round(100*dcorrect/len(dev_data),2)))
+        _, d_acc = evaluate_dataset(data_dir, dev_data, model, step_size)
+        print('Accuracy:\nTrain Data {}%, {} total samples\nDev Data {}%, {} total samples'.format(
+            round(100*t_acc,2), len(train_data), round(100*d_acc,2), len(dev_data)))
     return
 
 def main(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
