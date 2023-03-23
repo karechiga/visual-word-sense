@@ -20,22 +20,20 @@ class Model(torch.nn.Module):
         layers = list(res50._modules.keys())
         # Want to remove the final linear layer of ResNet50
         self.i_pretrained = torch.nn.Sequential(*[res50._modules[x] for x in layers[:-1]])
-        self.i_pretrained.train()
         self.i_preprocess = i_weights.transforms()
         res50 = None
         i_weights = None
         layers = None
         w_activation = torch.nn.ReLU() if config['word_activations'] == 'relu' else torch.nn.Tanh()
         if config['word_linears'] == 1:
-            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(50, 2048, device=device), w_activation)
+            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 2048, device=device), w_activation)
         elif config['word_linears'] == 2:
-            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(50, 512, device=device), w_activation,
+            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
                                                     torch.nn.Linear(512, 2048, device=device), w_activation)
         elif config['word_linears'] == 3:
-            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(50, 512, device=device), w_activation,
+            self.w_sequential = torch.nn.Sequential(torch.nn.Linear(300, 512, device=device), w_activation,
                                                     torch.nn.Linear(512, 1024, device=device), w_activation,
                                                     torch.nn.Linear(1024, 2048, device=device), w_activation)
-        
         o_activation = torch.nn.ReLU() if config['out_activations'] == 'relu' else torch.nn.Tanh()
         drop = torch.nn.Dropout(p=config['dropout'])
         if config['out_linears'] == 1:

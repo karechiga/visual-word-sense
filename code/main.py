@@ -63,7 +63,7 @@ def run_batch(batch, model, training = False, loss_fnc = None, optimizer = None,
     softmax = torch.nn.Softmax(dim=1)
     predictions = torch.argmax(softmax(outputs), dim=1)
     actual = torch.Tensor([np.where(images[n] == labels[n])[0][0] for n in range(len(images))]).to(device)
-    if words is not None:
+    if words is not None:   # If including non-tokenized words in the batch, output them and their predictions.
         output_predictions(index=sample_num, words=words, images=images,
                            outputs=softmax(outputs).cpu().detach().numpy(), predictions=predictions,
                            answers=actual, labels=labels)
@@ -131,6 +131,11 @@ def train(model_dir, data_dir, train_data, dev_data):
         batches = pre.getBatches(train_data, wandb.config.batch_size)
         vbatches = pre.getBatches(dev_data, wandb.config.batch_size) # validation data split into batches
         # Make sure gradient tracking is on, and do a pass over the data
+        ##############################################################################################################################
+        # For displaying words and their predictions in the first and last batch of the epoch
+        batches[0][3] = emb.untokenize([list(map(str, x[0:2].cpu().detach().numpy())) for x in batches[0][0]], data_dir)
+        batches[-1][3] = emb.untokenize([list(map(str, x[0:2].cpu().detach().numpy())) for x in batches[-1][0]], data_dir)
+        ##############################################################################################################################
         avg_loss = None; accuracy = 0
         avg_loss, accuracy = run_epoch(e=e, batches=batches, model=model, training=True, loss_fnc=loss_fnc, optimizer=optimizer)
         val_loss = None; val_acc = 0
@@ -144,7 +149,8 @@ def train(model_dir, data_dir, train_data, dev_data):
             best_v_acc = val_acc
             best_num_epochs = e
             best_model = None
-            best_model = copy.deepcopy(model.state_dict())
+            best_model = copy.deepcopy(model.to('cpu').state_dict())
+            model.to(device)
             count = 0
         else:
             count += 1
@@ -155,7 +161,7 @@ def train(model_dir, data_dir, train_data, dev_data):
 
     print('saving model')
     model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
-    timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size)
+    timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, best_num_epochs, wandb.config.train_size)
     os.mkdir(model_dir)
     print('Model dir: {}'.format(model_dir))
     model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
