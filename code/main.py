@@ -43,20 +43,18 @@ def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_s
             "dev_size": dev_size,
             'random_seed': seed,
             'early_stop': early_stop,
-            'model_config': {
-                'model': model,
-                'word_linears': word_linears,
-                'word_activations': word_activations,
-                'out_linears': out_linears,
-                "dropout": dropout,
-                'out_activations': out_activations
-            }
+            'model': model,
+            'word_linears': word_linears,
+            'word_activations': word_activations,
+            'out_linears': out_linears,
+            "dropout": dropout,
+            'out_activations': out_activations,
         }
     )
 
 def run_batch(batch, model, training = False, loss_fnc = None, optimizer = None, sample_num = 0):
     model.train(training)
-    if training == True:
+    if training == True and optimizer is not None:
         optimizer.zero_grad()
     tokens, images, labels, words = batch
     outputs = model.forward(tokens, images)
@@ -75,7 +73,7 @@ def run_batch(batch, model, training = False, loss_fnc = None, optimizer = None,
         # Compute the loss
         loss = loss_fnc(outputs, actual.type(torch.LongTensor).to(device)).to(device)
         l = float(loss.item())
-    if training == True:
+    if training == True and loss_fnc is not None and optimizer is not None:
         # Compute gradients
         loss.backward()
         # Adjust learning weights
@@ -102,17 +100,24 @@ def run_epoch(e, batches, model, training = False, loss_fnc = None, optimizer = 
                 correct, total, round(100*correct / total,2)))
     return running_loss / len(batches), correct/total
 
-def train(model_dir, data_dir, train_data, dev_data):
+def train(model_dir, data_dir, train_data, dev_data, save):
     """
     Train the model on the given training dataset located at "data_dir".
     """
-
+    model_config = {
+        'model': wandb.config.model,
+        'word_linears': wandb.config.word_linears,
+        'word_activations': wandb.config.word_activations,
+        'out_linears': wandb.config.out_linears,
+        "dropout": wandb.config.dropout,
+        'out_activations': wandb.config.out_activations,
+    }
     np.random.seed(wandb.config.random_seed)
 
-    if wandb.config.model_config['model'] == 'model1':
+    if wandb.config['model'] == 'model1':
         import model1 as md
         print('Using model1.py for the model.')
-    elif wandb.config.model_config['model'] == 'model2':
+    elif wandb.config['model'] == 'model2':
         import model2 as md
         print('Using model2.py for the model.')
     else:
@@ -120,7 +125,7 @@ def train(model_dir, data_dir, train_data, dev_data):
         print('Using model.py for the model.')
 
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
-    model = md.Model(data_dir, img_path, wandb.config.model_config).to(device)
+    model = md.Model(data_dir, img_path, model_config).to(device)
     loss_fnc = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
     best_v_acc = 0.0; best_num_epochs = 0; count = 0
@@ -134,8 +139,8 @@ def train(model_dir, data_dir, train_data, dev_data):
         ##############################################################################################################################
         # For displaying words and their predictions in the first and last batch of the epoch
         batches[0][3] = emb.untokenize([list(map(str, x[0:2].cpu().detach().numpy())) for x in batches[0][0]], data_dir)
-        batches[-1][3] = emb.untokenize([list(map(str, x[0:2].cpu().detach().numpy())) for x in batches[-1][0]], data_dir)
         ##############################################################################################################################
+
         avg_loss = None; accuracy = 0
         avg_loss, accuracy = run_epoch(e=e, batches=batches, model=model, training=True, loss_fnc=loss_fnc, optimizer=optimizer)
         val_loss = None; val_acc = 0
@@ -158,17 +163,17 @@ def train(model_dir, data_dir, train_data, dev_data):
                 print("Early stopping initiated after {} consecutive epochs below the best validation accuracy.".format(count))
                 break
     wandb.log({"best_val_acc": best_v_acc, "best_num_epochs": best_num_epochs})
-
-    print('saving model')
-    model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
-    timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, best_num_epochs, wandb.config.train_size)
-    os.mkdir(model_dir)
-    print('Model dir: {}'.format(model_dir))
-    model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
-    config_path = model_dir + '/' + 'config_{}_{}.json'.format(timestamp, e)
-    torch.save(best_model, model_path)
-    with open(config_path, "w") as outfile:
-        outfile.write(json.dumps(wandb.config.model_config, indent=4))
+    if save:
+        print('saving model')
+        model_dir = model_dir + '/{}_lr{}_b{}_e{}_train{}'.format(
+        timestamp, round(wandb.config.learning_rate, 7), wandb.config.batch_size, best_num_epochs, wandb.config.train_size)
+        os.mkdir(model_dir)
+        print('Model dir: {}'.format(model_dir))
+        model_path = model_dir + '/' + 'model_{}_{}'.format(timestamp, e)
+        config_path = model_dir + '/' + 'config_{}_{}.json'.format(timestamp, e)
+        torch.save(best_model, model_path)
+        with open(config_path, "w") as outfile:
+            outfile.write(json.dumps(model_config, indent=4))
     return
 
 
@@ -230,12 +235,13 @@ def evaluate(model_dir, data_dir, test_dir, step_size, train_size, dev_size):
     return
 
 def main(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
-          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5, model='model'):
+          word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5,
+          model='model', save=False):
     train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
     configureWandB(learning_rate=learning_rate, batch_size=batch_size, epochs=epochs, dropout=dropout, train_size=len(train_data),
                    dev_size=len(dev_data), word_linears=word_linears, word_activations=word_activations, out_linears=out_linears,
                    out_activations=out_activations, seed=seed, early_stop=early_stop, model=model)
-    train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data)
+    train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data, save=save)
     return
 
 if __name__ == "__main__":
@@ -259,6 +265,7 @@ if __name__ == "__main__":
     train_parser.add_argument("--seed", type=int, default=22)
     train_parser.add_argument("--early_stop", type=int, default=100)
     train_parser.add_argument("--model", type=str, default='model')
+    train_parser.add_argument('--save', action='store_true')
     
     predict_parser = subparsers.add_parser("evaluate")
     predict_parser.set_defaults(func=evaluate)

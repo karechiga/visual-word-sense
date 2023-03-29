@@ -50,18 +50,18 @@ class Model(torch.nn.Module):
                                                     o_activation, torch.nn.Linear(3072, 1024, device=device),
                                                     o_activation, torch.nn.Linear(1024, 512, device=device),
                                                     drop, o_activation, torch.nn.Linear(512, 1, device=device))
-    def image_model(self, images):
+    def image_model(self, samples):
         # Returns outputs of NNs with input of multiple images
-        samples = []
-        for n, row in enumerate(images):
-            seqs = []
-            for i in row:
+        batch = []
+        for n, samp in enumerate(samples):
+            for i in samp:
                 img = Image.open(self.img_path + i).convert('RGB')
-                batch = self.i_preprocess(img).unsqueeze(0).to(device)
-                x = self.i_pretrained(batch).to(device)
-                seqs.append(x.flatten())
-            samples.append(torch.stack(seqs).to(device))
-        return torch.stack(samples).to(device)
+                img = self.i_preprocess(img).unsqueeze(0).to(device)
+                batch.append(img)
+        # Input all the images in the batch to the resnet model
+        x = self.i_pretrained(torch.stack(batch).squeeze(1).to(device)).to(device).squeeze(2).squeeze(2)
+        # Outputs a BatchSize*10 x 2048 Tensor
+        return x
     def word_model(self, words):
         # Returns the output of a NN with an input of two words
         x = self.w_embeddings(words.to(device))
@@ -76,10 +76,12 @@ class Model(torch.nn.Module):
         # print("words and images pretrained: {} GB".format(psutil.Process(os.getpid()).memory_info().rss/1000000000))
         # Combining the word and image tensors
         out_tensor = []
-        for i, sample in enumerate(i_seqs):
+        num_img_samp = int(i_seqs.shape[0]/w_seq.shape[0])
+        # for each sample in the batch, then for each image in each sample, concatenate the word tensors to the image tensors
+        for i in range(w_seq.shape[0]):
             samps = []
-            for img in sample:
-                x = torch.cat((img.unsqueeze(0), w_seq[i])).to(device)
+            for j in range(i*num_img_samp, i*num_img_samp + num_img_samp):
+                x = torch.cat((i_seqs[j].unsqueeze(0), w_seq[i])).to(device)
                 samps.append(x.flatten())
             out_tensor.append(torch.stack(samps).to(device))
         out = self.o_sequential(torch.stack(out_tensor).to(device)).squeeze(2)
