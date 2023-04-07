@@ -20,12 +20,13 @@ default_config = {
     'random_seed': 22,
     'early_stop': 1000,
     'early_stop_threshold': 0.01,
-    'model' : 'MiniLM_L6_v2',
+    'model' : 'mpnet_base_v2',
     'dropout': 0.25,
     'word_linears': 1,
     'word_activations': 'tanh',
     'out_linears': 2,
-    'out_activations': 'relu'
+    'out_activations': 'relu',
+    'sent_structure': 'word0 word1'
 }
 
 def main():
@@ -49,6 +50,8 @@ if __name__ == "__main__":
     parser.add_argument("--dev_size", type=int, default=1000000)
     parser.add_argument("--model", type=str, default='MiniLM_L6_v2')
     parser.add_argument("--bn_momentum", type=float, default=0.1)
+    parser.add_argument("--sent_structure", type=str, default='word0 word1')
+
     # parser.add_argument('--bn_not_track', action='store_false')
 
     args = parser.parse_args()
@@ -62,22 +65,22 @@ if __name__ == "__main__":
     default_config['dev_size'] = kwargs['dev_size']
     default_config['dropout'] = kwargs['dropout']
     default_config['model'] = kwargs['model']
+    default_config['sent_structure'] = kwargs['sent_structure']
 
     if kwargs['sweep_id'] is not None:
         sweep_id = kwargs['sweep_id']
     else:
         sweep_config = {
         'method': 'random',
-        'name': 'updated_model',
+        'name': 'lower_lr',
         'metric': {
             'goal': 'maximize',
-            'name': 'val_acc'
+            'name': 'best_val_acc'
             },
         'parameters': {
-            'dropout': {'max': 0.9, 'min': 0.10},
-            'learning_rate': {'max': 0.001, 'min': 0.00001},
+            'dropout': {'max': 0.4, 'min': 0.15},
+            'learning_rate': {'max': 0.00057, 'min': 0.00052},
             'random_seed': {'max' : 1000, 'min': 0},
-            'model': {'values': ['MiniLM_L6_v2', 'mpnet_base_v2']}
             }
         }
         sweep_id = wandb.sweep(sweep=sweep_config, project="visualwordsense")

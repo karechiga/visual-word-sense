@@ -18,26 +18,21 @@ import wandb
 import preprocess as pre
 import copy
 import json
+import re
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if torch.cuda.is_available():
     print("USING GPU")
 
 def init_model(data_dir, img_path, model_config):
-    if wandb.config['model'] == 'MiniLM_L6_v2':
-        import model_MiniLM_L6_v2 as md
-        print('Using model_MiniLM_L6_v2.py for the model.')
-    elif wandb.config['model'] == 'mpnet_base_v2':
-        import model_mpnet_base_v2 as md
-        print('Using model_mpnet_base_v2.py for the model.')
-    else:
-        import model_MiniLM_L6_v2 as md
-        print('Using model_MiniLM_L6_v2.py for the model.')
+    import model as md
+    print('Using model.py for the model.')
+    model_config['model'] = re.sub('_', '-', model_config['model'])
     return md.Model(data_dir, img_path, model_config).to(device)
 
 def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_size,
                    word_linears, word_activations, out_linears, out_activations, seed,
-                   early_stop, es_threshold, model):
+                   early_stop, es_threshold, model, sent_structure):
     # start a new wandb run to track this script
     wandb.init(
         # set the wandb project where this run will be logged
@@ -59,6 +54,7 @@ def configureWandB(learning_rate, batch_size, epochs, dropout, train_size, dev_s
             'out_linears': out_linears,
             "dropout": dropout,
             'out_activations': out_activations,
+            'sent_structure': sent_structure
         }
     )
 
@@ -122,6 +118,7 @@ def train(model_dir, data_dir, train_data, dev_data, save):
         'out_linears': wandb.config.out_linears,
         "dropout": wandb.config.dropout,
         'out_activations': wandb.config.out_activations,
+        'sent_structure': wandb.config.sent_structure
     }
     np.random.seed(wandb.config.random_seed)
     threshold = 0
@@ -221,11 +218,12 @@ def evaluate(model_dir, data_dir, test_dir, step_size, train_size, dev_size, rem
 
 def main(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
           word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5, 
-          es_threshold = 0.01, model='model', save=False):
+          es_threshold = 0.01, model='model', sent_structure='default', save=False):
     train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
     configureWandB(learning_rate=learning_rate, batch_size=batch_size, epochs=epochs, dropout=dropout, train_size=len(train_data),
                    dev_size=len(dev_data), word_linears=word_linears, word_activations=word_activations, out_linears=out_linears,
-                   out_activations=out_activations, seed=seed, early_stop=early_stop, es_threshold=es_threshold, model=model)
+                   out_activations=out_activations, seed=seed, early_stop=early_stop, es_threshold=es_threshold, model=model,
+                   sent_structure=sent_structure)
     train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data, save=save)
     return
 
@@ -251,6 +249,7 @@ if __name__ == "__main__":
     train_parser.add_argument("--early_stop", type=int, default=100)
     train_parser.add_argument("--es_threshold", type=float, default=0.01)
     train_parser.add_argument("--model", type=str, default='MiniLM_L6_v2')
+    train_parser.add_argument("--sent_structure", type=str, default='word0 word1')
     train_parser.add_argument('--save', action='store_true')
     
     predict_parser = subparsers.add_parser("evaluate")

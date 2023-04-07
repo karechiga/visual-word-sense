@@ -55,7 +55,7 @@ def getBatches(data, batch_size, rand = True):
     for i in range(0, len(data), batch_size):
         batch = []
         # Word input
-        batch.append([' '.join(x[0:2]) for x in data[i:i+batch_size]])
+        batch.append([x[0:2] for x in data[i:i+batch_size]])
         # Images input
         batch.append([x[2:-1] for x in data[i:i+batch_size]])
         # output

@@ -6,7 +6,7 @@ Image.MAX_IMAGE_PIXELS = None
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 from sentence_transformers import SentenceTransformer
-
+import re
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
@@ -14,8 +14,11 @@ class Model(torch.nn.Module):
     def __init__(self, data_dir, img_path, config):
         super(Model, self).__init__()
         self.img_path = img_path
-        # self.w_embeddings = emb.wordEmbeddingLayer(data_dir)
-        self.transformer_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
+        self.transformer_model = SentenceTransformer('sentence-transformers/all-' + config['model'])
+        self.sent_structure = config['sent_structure']
+        # Sentence structure determines how we will input the words into the transformer
+        # If equals default, then the words will be processed as two separate embeddings
+        o_dim = 2048*2
         w_embed_dim = self.transformer_model._modules['1'].word_embedding_dimension
         i_weights = models.ResNet50_Weights.IMAGENET1K_V2
         res50 = models.resnet50(weights=i_weights)
@@ -39,16 +42,16 @@ class Model(torch.nn.Module):
         o_activation = torch.nn.ReLU() if config['out_activations'] == 'relu' else torch.nn.Tanh()
         drop = torch.nn.Dropout(p=config['dropout'])
         if config['out_linears'] == 1:
-            self.o_sequential = torch.nn.Sequential(drop, torch.nn.Linear(4096, 1, device=device))
+            self.o_sequential = torch.nn.Sequential(drop, torch.nn.Linear(o_dim, 1, device=device))
         elif config['out_linears'] == 2:
-            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(4096, 3072, device=device), drop,
+            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device), drop,
                                                     o_activation, torch.nn.Linear(3072, 1, device=device))
         elif config['out_linears'] == 3:
-            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(4096, 3072, device=device), drop,
+            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device), drop,
                                                     o_activation, torch.nn.Linear(3072, 1024, device=device),
                                                     o_activation, torch.nn.Linear(1024, 1, device=device))
         elif config['out_linears'] == 4:
-            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(4096, 3072, device=device), drop,
+            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device), drop,
                                                     o_activation, torch.nn.Linear(3072, 1024, device=device),
                                                     o_activation, torch.nn.Linear(1024, 512, device=device),
                                                     drop, o_activation, torch.nn.Linear(512, 1, device=device))
@@ -66,7 +69,12 @@ class Model(torch.nn.Module):
         return x
     def word_model(self, words):
         # Returns the output of a NN with an input of two words
-        x = torch.Tensor(self.transformer_model.encode(words)).to(device)
+        sents = []
+        for w in words:
+            sent = re.sub('word0', w[0], self.sent_structure)
+            sent = re.sub('word1', w[1], sent)
+            sents.append(sent)
+        x = torch.Tensor(self.transformer_model.encode(sents)).to(device)
         x = self.w_sequential(x)
         return x
     def forward(self, words, images):
@@ -83,7 +91,7 @@ class Model(torch.nn.Module):
         for i in range(w_seq.shape[0]):
             samps = []
             for j in range(i*num_img_samp, i*num_img_samp + num_img_samp):
-                x = torch.cat((i_seqs[j].unsqueeze(0), w_seq[i].unsqueeze(0))).to(device)
+                x = torch.cat((i_seqs[j].unsqueeze(0), w_seq[i].unsqueeze(0) if len(w_seq[i].shape) == 1 else w_seq[i])).to(device)
                 samps.append(x.flatten())
             out_tensor.append(torch.stack(samps).to(device))
         out = self.o_sequential(torch.stack(out_tensor).to(device)).squeeze(2)
