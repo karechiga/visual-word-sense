@@ -248,7 +248,7 @@ if __name__ == "__main__":
     train_parser.add_argument("--seed", type=int, default=22)
     train_parser.add_argument("--early_stop", type=int, default=100)
     train_parser.add_argument("--es_threshold", type=float, default=0.01)
-    train_parser.add_argument("--model", type=str, default='MiniLM_L6_v2')
+    train_parser.add_argument("--model", type=str, default='mpnet_base_v2')
     train_parser.add_argument("--sent_structure", type=str, default='word0 word1')
     train_parser.add_argument('--save', action='store_true')
     

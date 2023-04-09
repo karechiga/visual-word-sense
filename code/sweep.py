@@ -48,7 +48,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--train_size", type=int, default=1000000)
     parser.add_argument("--dev_size", type=int, default=1000000)
-    parser.add_argument("--model", type=str, default='MiniLM_L6_v2')
+    parser.add_argument("--model", type=str, default='mpnet_base_v2')
     parser.add_argument("--bn_momentum", type=float, default=0.1)
     parser.add_argument("--sent_structure", type=str, default='word0 word1')
 
@@ -72,15 +72,15 @@ if __name__ == "__main__":
     else:
         sweep_config = {
         'method': 'random',
-        'name': 'lower_lr',
+        'name': 'larger_lr',
         'metric': {
             'goal': 'maximize',
             'name': 'best_val_acc'
             },
         'parameters': {
-            'dropout': {'max': 0.4, 'min': 0.15},
-            'learning_rate': {'max': 0.00057, 'min': 0.00052},
-            'random_seed': {'max' : 1000, 'min': 0},
+            'dropout': {'max': 0.5, 'min': 0.15},
+            'learning_rate': {'max': 0.00071, 'min': 0.00065},
+            'random_seed': {'max' : 15, 'min': 0},
             }
         }
         sweep_id = wandb.sweep(sweep=sweep_config, project="visualwordsense")
