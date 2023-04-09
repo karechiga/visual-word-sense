@@ -107,7 +107,7 @@ def run_epoch(e, batches, model, training = False, loss_fnc = None, optimizer = 
                 correct, total, round(100*correct / total,2)))
     return running_loss / len(batches), correct/total
 
-def train(model_dir, data_dir, train_data, dev_data, save):
+def train(model_dir, data_dir, train_data, dev_data, train_img, dev_img, save):
     """
     Train the model on the given training dataset located at "data_dir".
     """
@@ -120,7 +120,6 @@ def train(model_dir, data_dir, train_data, dev_data, save):
         'out_activations': wandb.config.out_activations,
         'sent_structure': wandb.config.sent_structure
     }
-    np.random.seed(wandb.config.random_seed)
     threshold = 0
     img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
     model = init_model(data_dir, img_path, model_config)
@@ -132,8 +131,8 @@ def train(model_dir, data_dir, train_data, dev_data, save):
     print('{} - lr{} batchsize{} epochs{} train_size{} dev_size{}'.format(
         timestamp, wandb.config.learning_rate, wandb.config.batch_size, wandb.config.epochs, wandb.config.train_size, wandb.config.dev_size))
     for e in range(wandb.config.epochs):
-        batches = pre.getBatches(train_data, wandb.config.batch_size)
-        vbatches = pre.getBatches(dev_data, wandb.config.batch_size) # validation data split into batches
+        batches = pre.getBatches(data=train_data, images=train_img, batch_size=wandb.config.batch_size)
+        vbatches = pre.getBatches(data=dev_data, images=dev_img, batch_size=wandb.config.batch_size) # validation data split into batches
         avg_loss = None; accuracy = 0
         avg_loss, accuracy = run_epoch(e=e, batches=batches, model=model, training=True, loss_fnc=loss_fnc, optimizer=optimizer)
         val_loss = None; val_acc = 0
@@ -189,8 +188,8 @@ def output_predictions(index, words, images, outputs, predictions, answers, labe
                 top_3[2], images[i][top_3[2]], c[2], round(100*outputs[i][top_3[2]],2)))
     return
 
-def evaluate_dataset(data_dir, data, model, step_size):
-    batches = pre.getBatches(data, step_size, rand=False)
+def evaluate_dataset(data_dir, data, images, model, step_size):
+    batches = pre.getBatches(data, images, step_size, rand=False)
     loss, acc = run_epoch(0, batches, model, training = False, loss_fnc = None, optimizer = None, out=True)
     return loss, acc
 
@@ -201,7 +200,7 @@ def evaluate(model_dir, data_dir, test_dir, step_size, train_size, dev_size, rem
         X = pre.readXData(glob.glob(test_dir + '/*data*')[0])
         y = pre.readYData(glob.glob(test_dir + '/*gold*')[0])
     else:
-        train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
+        train_data, dev_data, train_img, dev_img= pre.preprocessData(data_dir, train_size, dev_size)
         img_path = glob.glob(data_dir + '/*train*/*images*/')[0]
         model = init_model(data_dir, img_path, model_config)
         model.load_state_dict(torch.load(glob.glob(model_dir + '/*model*')[0]))
@@ -219,12 +218,13 @@ def evaluate(model_dir, data_dir, test_dir, step_size, train_size, dev_size, rem
 def main(model_dir, data_dir, epochs=10, batch_size=10, learning_rate = 0.01, dropout=0.25, train_size=1000000, dev_size=1000000,
           word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5, 
           es_threshold = 0.01, model='model', sent_structure='default', save=False):
-    train_data, dev_data = pre.preprocessData(data_dir, train_size, dev_size)
+    train_data, dev_data, train_img, dev_img = pre.preprocessData(data_dir, train_size, dev_size)
     configureWandB(learning_rate=learning_rate, batch_size=batch_size, epochs=epochs, dropout=dropout, train_size=len(train_data),
                    dev_size=len(dev_data), word_linears=word_linears, word_activations=word_activations, out_linears=out_linears,
                    out_activations=out_activations, seed=seed, early_stop=early_stop, es_threshold=es_threshold, model=model,
                    sent_structure=sent_structure)
-    train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data, save=save)
+    train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data,
+          train_img=train_img, dev_img=dev_img, save=save)
     return
 
 if __name__ == "__main__":
@@ -263,4 +263,5 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     kwargs = vars(args)
+    np.random.seed(kwargs['seed'])
     kwargs.pop("func")(**kwargs)

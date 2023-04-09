@@ -1,0 +1,8 @@
+wandb_version: 1
+
+dropout:
+  value: 0.661169524712551
+learning_rate:
+  value: 0.000717502656067927
+random_seed:
+  value: 3

@@ -1,5 +1,6 @@
 import argparse
 import torch
+import numpy as np
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 from PIL import ImageFile
@@ -32,7 +33,10 @@ default_config = {
 def main():
     wandb.init(project="visualwordsense")
     wandb.config.setdefaults(default_config)
-    mn.train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data, save=False)
+    np.random.seed(wandb.config.random_seed)
+    train_data, dev_data, train_img, dev_img = pre.preprocessData(data_dir, kwargs['train_size'], kwargs['dev_size'])
+    mn.train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data, 
+             train_img=train_img, dev_img=dev_img, save=False)
     return
 
 
@@ -72,14 +76,14 @@ if __name__ == "__main__":
     else:
         sweep_config = {
         'method': 'random',
-        'name': 'larger_lr',
+        'name': 'split_images',
         'metric': {
             'goal': 'maximize',
             'name': 'best_val_acc'
             },
         'parameters': {
-            'dropout': {'max': 0.5, 'min': 0.15},
-            'learning_rate': {'max': 0.00071, 'min': 0.00065},
+            'dropout': {'max': 0.65, 'min': 0.1},
+            'learning_rate': {'max': 0.00065, 'min': 0.00045},
             'random_seed': {'max' : 15, 'min': 0},
             }
         }
@@ -87,5 +91,4 @@ if __name__ == "__main__":
 
     model_dir = "../models_data"
     data_dir = "../data"
-    train_data, dev_data = pre.preprocessData(data_dir, kwargs['train_size'], kwargs['dev_size'])
     wandb.agent(sweep_id, project='visualwordsense',function=main, count=10)

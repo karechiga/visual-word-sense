@@ -1,0 +1,54 @@
+Reducing Training data to 10 elements
+Reducing Dev data to 6 elements.
+Using model.py for the model.
+20230409_000204 - lr0.000717502656067927 batchsize2 epochs3 train_size10 dev_size6
+TRAINING: EPOCH 1: Batch 1 out of 5
+INCORRECT:	0. wad material	| Predicted: (6) image.5169.jpg	| Answer: (9) image.3736.jpg
+Top 3:	1. (6) image.5169.jpg, 11.05%	2. (9) image.3736.jpg*, 10.91%	3. (8) image.4504.jpg, 10.42%
+INCORRECT:	1. corozo seed	| Predicted: (5) image.736.jpg	| Answer: (2) image.13560.jpg
+Top 3:	1. (5) image.736.jpg, 11.42%	2. (1) image.495.jpg, 11.4%	3. (0) image.13011.jpg, 10.41%
+0 out of 2 (0.0%) correctly predicted:
+Average Loss is 2.269, Overall Accuracy is 0/2 (0.0%)
+TRAINING: EPOCH 1: Batch 2 out of 5
+0 out of 2 (0.0%) correctly predicted:
+Average Loss is 2.167, Overall Accuracy is 0/4 (0.0%)
+TRAINING: EPOCH 1: Batch 3 out of 5
+0 out of 2 (0.0%) correctly predicted:
+Average Loss is 2.332, Overall Accuracy is 0/6 (0.0%)
+TRAINING: EPOCH 1: Batch 4 out of 5
+0 out of 2 (0.0%) correctly predicted:
+Average Loss is 2.985, Overall Accuracy is 0/8 (0.0%)
+TRAINING: EPOCH 1: Batch 5 out of 5
+0 out of 2 (0.0%) correctly predicted:
+Average Loss is 3.075, Overall Accuracy is 0/10 (0.0%)
+EVALUATION: EPOCH 1: Batch 1 out of 3
+INCORRECT:	0. carrot herb	| Predicted: (2) image.11281.jpg	| Answer: (4) image.2441.jpg
+Top 3:	1. (2) image.11281.jpg, 99.98%	2. (9) image.9151.jpg, 0.02%	3. (5) image.1825.jpg, 0.0%
+INCORRECT:	1. samovar urn	| Predicted: (9) image.4079.jpg	| Answer: (5) image.9033.jpg
+Top 3:	1. (9) image.4079.jpg, 85.81%	2. (5) image.9033.jpg*, 14.18%	3. (4) image.377.jpg, 0.01%
+0 out of 2 (0.0%) correctly predicted:
+Average Loss is 10.597, Overall Accuracy is 0/2 (0.0%)
+EVALUATION: EPOCH 1: Batch 2 out of 3
+0 out of 2 (0.0%) correctly predicted:
+Average Loss is 14.459, Overall Accuracy is 0/4 (0.0%)
+EVALUATION: EPOCH 1: Batch 3 out of 3
+0 out of 2 (0.0%) correctly predicted:
+Average Loss is 17.529, Overall Accuracy is 0/6 (0.0%)
+Loss:		train 3.08	validation 17.53
+Accuracy:	train 0.0%	validation 0.0%
+TRAINING: EPOCH 2: Batch 1 out of 5
+CORRECT:	0. chickenpox pox	| Predicted: (7) image.6505.jpg	| Answer: (7) image.6505.jpg
+Top 3:	1. (7) image.6505.jpg*, 52.96%	2. (5) image.5167.jpg, 18.17%	3. (8) image.14842.jpg, 12.27%
+CORRECT:	1. quandong tree	| Predicted: (3) image.6960.jpg	| Answer: (3) image.6960.jpg
+Top 3:	1. (3) image.6960.jpg*, 39.78%	2. (4) image.8958.jpg, 23.62%	3. (1) image.3861.jpg, 12.19%
+2 out of 2 (100.0%) correctly predicted:
+Average Loss is 0.779, Overall Accuracy is 2/2 (100.0%)
+TRAINING: EPOCH 2: Batch 2 out of 5
+1 out of 2 (50.0%) correctly predicted:
+Average Loss is 1.026, Overall Accuracy is 3/4 (75.0%)
+TRAINING: EPOCH 2: Batch 3 out of 5
+1 out of 2 (50.0%) correctly predicted:
+Average Loss is 1.468, Overall Accuracy is 4/6 (66.67%)
+TRAINING: EPOCH 2: Batch 4 out of 5
+1 out of 2 (50.0%) correctly predicted:
+Average Loss is 1.36, Overall Accuracy is 5/8 (62.5%)
