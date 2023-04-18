@@ -18,6 +18,7 @@ default_config = {
     "epochs": 3,
     "train_size": 600,
     "dev_size": 200,
+    "shuffle_options": True,
     'random_seed': 22,
     'early_stop': 1000,
     'early_stop_threshold': 0.01,
@@ -36,7 +37,7 @@ def main():
     wandb.init(project="visualwordsense")
     wandb.config.setdefaults(default_config)
     np.random.seed(wandb.config.random_seed)
-    train_data, dev_data, train_img, dev_img = pre.preprocessData(data_dir, kwargs['train_size'], kwargs['dev_size'])
+    train_data, dev_data, train_img, dev_img = pre.preprocessData(data_dir, kwargs['train_size'], kwargs['dev_size'], shuffle_options=kwargs['shuffle_options'])
     mn.train(model_dir=model_dir, data_dir=data_dir, train_data=train_data, dev_data=dev_data,
              train_img=train_img, dev_img=dev_img, save=False)
     return
@@ -59,6 +60,8 @@ if __name__ == "__main__":
     parser.add_argument("--bn_momentum", type=float, default=0.1)
     parser.add_argument("--sent_structure", type=str, default='word0 word1')
     parser.add_argument("--vector_combine", type=str, default='concat')
+    parser.add_argument('--shuffle_options', action='store_true')
+    
 
     # parser.add_argument('--bn_not_track', action='store_false')
 
@@ -76,24 +79,23 @@ if __name__ == "__main__":
     default_config['model'] = kwargs['model']
     default_config['sent_structure'] = kwargs['sent_structure']
     default_config['vector_combine'] = kwargs['vector_combine']
+    default_config['shuffle_options'] = kwargs['shuffle_options']
 
     if kwargs['sweep_id'] is not None:
         sweep_id = kwargs['sweep_id']
     else:
         sweep_config = {
         'method': 'random',
-        'name': 'model config sweep',
+        'name': 'sweep without shuffling image options',
         'metric': {
             'goal': 'maximize',
             'name': 'best_val_acc'
             },
         'parameters': {
-            'i_dropout': {'max': 0.35, 'min': 0.0},
-            'w_dropout': {'max': 0.35, 'min': 0.0},
-            'learning_rate': {'max': 0.001, 'min': 0.0001},
+            'i_dropout': {'max': 0.3, 'min': 0.15},
+            'w_dropout': {'max': 0.3, 'min': 0.15},
+            'learning_rate': {'max': 0.0006, 'min': 0.0002},
             'random_seed': {'max' : 25, 'min': 0},
-            'vector_combine': {'values': ['dot', 'concat']},
-            'model': {'values': ['glove', 'mpnet_base_v2']}
             }
         }
         sweep_id = wandb.sweep(sweep=sweep_config, project="visualwordsense")

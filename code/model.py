@@ -10,7 +10,7 @@ from sentence_transformers import SentenceTransformer
 import re
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
+print(f'Using {device.type}')
 class Model(torch.nn.Module):
     def __init__(self, data_dir, img_path, config):
         super(Model, self).__init__()
@@ -19,7 +19,7 @@ class Model(torch.nn.Module):
         if config['model'] == 'glove':
             self.w_embeddings = emb.wordEmbeddingLayer(data_dir)
             o_dim = 2048*3
-            w_embed_dim = 50 if device.type == 'cpu' else 300
+            w_embed_dim = 300
             self.sent_structure = None
         else:
             self.transformer_model = SentenceTransformer('sentence-transformers/all-' + config['model'])
