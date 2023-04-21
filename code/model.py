@@ -16,22 +16,20 @@ class Model(torch.nn.Module):
         super(Model, self).__init__()
         self.img_path = img_path
         self.data_dir = data_dir
+        self.w_model = config['model']
         if config['model'] == 'glove':
             self.w_embeddings = emb.wordEmbeddingLayer(data_dir)
             o_dim = 2048*3
             w_embed_dim = 300
-            self.sent_structure = None
         else:
             self.transformer_model = SentenceTransformer('sentence-transformers/all-' + config['model'])
-            self.sent_structure = config['sent_structure']
-            # Sentence structure determines how we will input the words into the transformer
             o_dim = 2048*2
             w_embed_dim = self.transformer_model._modules['1'].word_embedding_dimension
         i_weights = models.ResNet50_Weights.IMAGENET1K_V2
         res50 = models.resnet50(weights=i_weights)
         layers = list(res50._modules.keys())
         # Want to remove the final linear layer of ResNet50
-        i_drop = torch.nn.Dropout(p=config['i_dropout'])
+        i_drop = torch.nn.Dropout(p=config['i_dropout'] if 'i_dropout' in config.keys() else 0)
         self.i_pretrained = torch.nn.Sequential(*[res50._modules[x] for x in layers[:-1]], i_drop)
         self.i_preprocess = i_weights.transforms()
         res50 = None
@@ -45,7 +43,7 @@ class Model(torch.nn.Module):
             if config['model'] == 'glove':
                 # Combines the 2 words
                 self.weighted_sum = torch.nn.Conv1d(in_channels=2, out_channels=1, kernel_size=1)
-        w_drop = torch.nn.Dropout(p=config['w_dropout'])
+        w_drop = torch.nn.Dropout(p=config['w_dropout'] if 'w_dropout' in config.keys() else 0)
         if config['word_linears'] == 1:
             self.w_sequential = torch.nn.Sequential(torch.nn.Linear(w_embed_dim, 2048, device=device), w_activation, w_drop)
         elif config['word_linears'] == 2:
@@ -55,18 +53,37 @@ class Model(torch.nn.Module):
             self.w_sequential = torch.nn.Sequential(torch.nn.Linear(w_embed_dim, 512, device=device), w_activation,
                                                     torch.nn.Linear(512, 1024, device=device), w_activation,
                                                     torch.nn.Linear(1024, 2048, device=device), w_activation, w_drop)
+        o_drop = torch.nn.Dropout(p=config['dropout'] if 'dropout' in config.keys() else 0)
         o_activation = torch.nn.ReLU() if config['out_activations'] == 'relu' else torch.nn.Tanh()
         if config['out_linears'] == 1:
-            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 1, device=device))
+            if 'dropout' in config.keys():
+                self.o_sequential = torch.nn.Sequential(o_drop, torch.nn.Linear(o_dim, 1, device=device))
+            else:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 1, device=device))
         elif config['out_linears'] == 2:
-            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device),
+            if 'dropout' in config.keys():
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device), o_drop,
+                                                    o_activation, torch.nn.Linear(3072, 1, device=device))
+            else:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device),
                                                     o_activation, torch.nn.Linear(3072, 1, device=device))
         elif config['out_linears'] == 3:
-            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device),
+            if 'dropout' in config.keys():
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device), o_drop,
+                                                    o_activation, torch.nn.Linear(3072, 1024, device=device),
+                                                    o_activation, torch.nn.Linear(1024, 1, device=device))
+            else:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device),
                                                     o_activation, torch.nn.Linear(3072, 1024, device=device),
                                                     o_activation, torch.nn.Linear(1024, 1, device=device))
         elif config['out_linears'] == 4:
-            self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device),
+            if 'dropout' in config.keys():
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device), o_drop,
+                                                    o_activation, torch.nn.Linear(3072, 1024, device=device),
+                                                    o_activation, torch.nn.Linear(1024, 512, device=device),
+                                                    o_drop, o_activation, torch.nn.Linear(512, 1, device=device))
+            else:
+                self.o_sequential = torch.nn.Sequential(torch.nn.Linear(o_dim, 3072, device=device),
                                                     o_activation, torch.nn.Linear(3072, 1024, device=device),
                                                     o_activation, torch.nn.Linear(1024, 512, device=device),
                                                     o_activation, torch.nn.Linear(512, 1, device=device))
@@ -84,16 +101,12 @@ class Model(torch.nn.Module):
         return x
     def word_model(self, words):
         # Returns the output of a NN with an input of two words
-        if self.sent_structure is None:
+        if self.w_model == 'glove':
             # inputs are tokens in this case
             x = self.w_embeddings(words.to(device))
         else:
-            sents = []
-            for w in words:
-                sent = re.sub('word0', w[0], self.sent_structure)
-                sent = re.sub('word1', w[1], sent)
-                sents.append(sent)
-            x = torch.Tensor(self.transformer_model.encode(sents)).to(device)
+            # input is a string
+            x = torch.Tensor(self.transformer_model.encode(words)).to(device)
         if self.weighted_sum is not None:
             x = self.weighted_sum(x)
         x = self.w_sequential(x)

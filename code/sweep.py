@@ -29,7 +29,6 @@ default_config = {
     'word_activations': 'tanh',
     'out_linears': 2,
     'out_activations': 'relu',
-    'sent_structure': 'word0 word1',
     'vector_combine': 'concat'
 }
 
@@ -58,7 +57,6 @@ if __name__ == "__main__":
     parser.add_argument("--dev_size", type=int, default=1000000)
     parser.add_argument("--model", type=str, default='mpnet_base_v2')
     parser.add_argument("--bn_momentum", type=float, default=0.1)
-    parser.add_argument("--sent_structure", type=str, default='word0 word1')
     parser.add_argument("--vector_combine", type=str, default='concat')
     parser.add_argument('--shuffle_options', action='store_true')
     
@@ -77,7 +75,6 @@ if __name__ == "__main__":
     default_config['i_dropout'] = kwargs['i_dropout']
     default_config['w_dropout'] = kwargs['w_dropout']
     default_config['model'] = kwargs['model']
-    default_config['sent_structure'] = kwargs['sent_structure']
     default_config['vector_combine'] = kwargs['vector_combine']
     default_config['shuffle_options'] = kwargs['shuffle_options']
 
@@ -92,9 +89,9 @@ if __name__ == "__main__":
             'name': 'best_val_acc'
             },
         'parameters': {
-            'i_dropout': {'max': 0.3, 'min': 0.15},
-            'w_dropout': {'max': 0.3, 'min': 0.15},
-            'learning_rate': {'max': 0.0006, 'min': 0.0002},
+            'i_dropout': {'max': 0.9, 'min': 0.1},
+            'w_dropout': {'max': 0.9, 'min': 0.1},
+            'learning_rate': {'max': 0.0009, 'min': 0.0001},
             'random_seed': {'max' : 25, 'min': 0},
             }
         }

@@ -20,6 +20,10 @@ import embeddings as emb
 import copy
 import json
 import re
+import nltk
+from nltk.corpus import stopwords
+nltk.download('stopwords')
+sw_nltk = stopwords.words('english')
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 if torch.cuda.is_available():
@@ -33,7 +37,7 @@ def init_model(img_path, model_config):
 
 def configureWandB(learning_rate, batch_size, epochs, i_dropout, w_dropout, train_size, dev_size,
                    word_linears, word_activations, out_linears, out_activations, seed,
-                   early_stop, es_threshold, model, sent_structure, vector_combine, shuffle_options):
+                   early_stop, es_threshold, model, vector_combine, shuffle_options):
     # start a new wandb run to track this script
     wandb.init(
         # set the wandb project where this run will be logged
@@ -57,18 +61,19 @@ def configureWandB(learning_rate, batch_size, epochs, i_dropout, w_dropout, trai
             "i_dropout": i_dropout,
             'w_dropout': w_dropout,
             'out_activations': out_activations,
-            'sent_structure': sent_structure,
             'vector_combine': vector_combine
         }
     )
 
-def run_batch(batch, model, training = False, loss_fnc = None, optimizer = None, sample_num = 0, out = False):
+def run_batch(batch, model, training = False, loss_fnc = None, optimizer = None, sample_num = 0, out = False, stats = False):
     model.train(training)
     if training == True and optimizer is not None:
         optimizer.zero_grad()
     words, images, labels = batch
-    if model.sent_structure is None:    # if using glove embeddings
-        tokens = torch.tensor(emb.tokenize(words, DATA_DIR)).to(torch.int64)
+    if model.w_model == "glove":    # if using glove embeddings
+        # remove stopwords
+        w = [[x for x in words[i].split() if x not in sw_nltk] for i in range(len(words))]
+        tokens = torch.tensor(emb.tokenize(w, DATA_DIR)).to(torch.int64)
         unk = tokens == 0
         outputs = model.forward(tokens, images)
     else:
@@ -80,7 +85,7 @@ def run_batch(batch, model, training = False, loss_fnc = None, optimizer = None,
     if out:   # output predictions for the batch
         output_predictions(index=sample_num, words=words, unk=unk, images=images,
                            outputs=softmax(outputs).cpu().detach().numpy(), predictions=predictions,
-                           answers=actual, labels=labels)
+                           answers=actual, labels=labels, stats=stats)
     correct = int(sum(predictions == actual))
     total = len(predictions)
     print('{} out of {} ({}%) correctly predicted:'.format(correct, total, round(100*correct/total,2)))
@@ -96,7 +101,7 @@ def run_batch(batch, model, training = False, loss_fnc = None, optimizer = None,
         optimizer.step()
     return correct, total, l
 
-def run_epoch(e, batches, model, training = False, loss_fnc = None, optimizer = None, out = False):
+def run_epoch(e, batches, model, training = False, loss_fnc = None, optimizer = None, out = False, stats = False):
     running_loss = 0
     correct = 0
     total = 0
@@ -104,7 +109,7 @@ def run_epoch(e, batches, model, training = False, loss_fnc = None, optimizer = 
     for i, batch in enumerate(batches):
         print(string + 'EPOCH {}: Batch {} out of {}'.format(e + 1, i+1, len(batches)))
         c, t, l = run_batch(batch, model, training=training, loss_fnc=loss_fnc, optimizer=optimizer, sample_num=total,
-                            out = True if i == 0 else out)  # Output the first batch of every epoch no matter what
+                            out = True if i == 0 else out, stats=stats)  # Output the first batch of every epoch no matter what
         # Gather data and report
         correct += c
         total += t
@@ -137,7 +142,6 @@ def train(data_dir, model_dir, train_data, dev_data, train_img, dev_img, save):
         'i_dropout': wandb.config.i_dropout,
         'w_dropout': wandb.config.w_dropout,
         'out_activations': wandb.config.out_activations,
-        'sent_structure': wandb.config.sent_structure,
         'vector_combine': wandb.config.vector_combine
     }
     threshold = 0
@@ -192,59 +196,78 @@ def train(data_dir, model_dir, train_data, dev_data, train_img, dev_img, save):
     return
 
 
-def output_predictions(index, words, unk, images, outputs, predictions, answers, labels):
+def output_predictions(index, words, unk, images, outputs, predictions, answers, labels, stats):
+    if stats:
+        f = open(MODEL_DIR + "/outputs.csv", "a")
     for i, p in enumerate(predictions):
         if predictions[i] == answers[i]:
-            print("CORRECT:\t{}. {} {} {} {}\t| Predicted: ({}) {}\t| Answer: ({}) {}".format(
-                    index + i, words[i][0], '<unk>' if unk[i][0] else '', words[i][1],
-                    '<unk>' if unk[i][1] else '', p, images[i][p], int(answers[i]), labels[i]))
+            print("CORRECT:\t{}. {}\t| Predicted: ({}) {}\t| Answer: ({}) {}".format(
+                    index + i, words[i], p, images[i][p], int(answers[i]), labels[i]))
         else:
-            print("INCORRECT:\t{}. {} {} {} {}\t| Predicted: ({}) {}\t| Answer: ({}) {}".format(
-                    index + i, words[i][0], '<unk>' if unk[i][0] else '', words[i][1],
-                    '<unk>' if unk[i][1] else '', p, images[i][p], int(answers[i]), labels[i]))
-        top_3 = outputs[i].argsort()[-3:][::-1]
-        c = ['*' if t == int(answers[i]) else '' for t in top_3]
+            print("INCORRECT:\t{}. {}\t| Predicted: ({}) {}\t| Answer: ({}) {}".format(
+                    index + i, words[i], p, images[i][p], int(answers[i]), labels[i]))
+        top = outputs[i].argsort()[:][::-1]
+        c = ['*' if t == int(answers[i]) else '' for t in top[:3]]
         print("Top 3:\t1. ({}) {}{}, {}%\t2. ({}) {}{}, {}%\t3. ({}) {}{}, {}%\n".format(
-                top_3[0], images[i][top_3[0]], c[0], round(100*outputs[i][top_3[0]],2),
-                top_3[1], images[i][top_3[1]], c[1], round(100*outputs[i][top_3[1]],2),
-                top_3[2], images[i][top_3[2]], c[2], round(100*outputs[i][top_3[2]],2)))
+                top[0], images[i][top[0]], c[0], round(100*outputs[i][top[0]],2),
+                top[1], images[i][top[1]], c[1], round(100*outputs[i][top[1]],2),
+                top[2], images[i][top[2]], c[2], round(100*outputs[i][top[2]],2)))
+        if stats:
+            f.write(f'{index+i},{words[i]},{images[i][top[0]]},{outputs[i][top[0]]},{images[i][top[1]]},{outputs[i][top[1]]}, \
+                    {images[i][top[2]]},{outputs[i][top[2]]},{images[i][top[3]]},{outputs[i][top[3]]}, \
+                    {images[i][top[4]]},{outputs[i][top[4]]},{images[i][top[5]]},{outputs[i][top[5]]}, \
+                    {images[i][top[6]]},{outputs[i][top[6]]},{images[i][top[7]]},{outputs[i][top[7]]}, \
+                    {images[i][top[8]]},{outputs[i][top[8]]},{images[i][top[9]]},{outputs[i][top[9]]}, \
+                    {labels[i]},{np.where(top==int(answers[i]))[0][0]+1}\n')
+    if stats:
+        f.close()
     return
 
 def evaluate_dataset(data, images, model, step_size):
-    batches = pre.getBatches(data, images, step_size, rand=False)
-    loss, acc = run_epoch(0, batches, model, training = False, loss_fnc = None, optimizer = None, out=True)
+    batches = pre.getBatches(data, images, step_size, rand=False, shuffle_options=False)
+    loss, acc = run_epoch(0, batches, model, training = False, loss_fnc = None, optimizer = None, out=True, stats=True)
     return loss, acc
 
-def evaluate(test_dir, step_size, train_size, dev_size, remove_unk_tokens=False):
+def evaluate(data_dir, model_dir, test_dir, step_size, train_size, dev_size, seed):
+    np.random.seed(seed)
     model_config = json.load(open(glob.glob(MODEL_DIR + '/*config*')[0],'r'))
     if test_dir is not None:
         img_path = glob.glob(test_dir + '/*images*/')[0]
         X = pre.readXData(glob.glob(test_dir + '/*data*')[0])
         y = pre.readYData(glob.glob(test_dir + '/*gold*')[0])
+        imgs = glob.glob(img_path + '*.jpg')
+        imgs = [x[re.search('image\.(.*)',x).regs[0][0]:] for x in imgs]
+        model = init_model(img_path, model_config)
+        model.load_state_dict(torch.load(glob.glob(MODEL_DIR + '/*model*')[0]))
+        model.eval()
+        print("Evaluating Test Data")
+        _, acc = evaluate_dataset(np.vstack((np.array(X).T,np.array(y))).T, imgs, model, step_size)
+        print('Accuracy:\nTest Data {}%, {} total samples'.format(
+            round(100*acc,2), len(y)))
     else:
-        train_data, dev_data, train_img, dev_img= pre.preprocessData(DATA_DIR, train_size, dev_size)
+        train_data, dev_data, train_img, dev_img= pre.preprocessData(DATA_DIR, train_size, dev_size, shuffle_options=False)
         img_path = glob.glob(DATA_DIR + '/*train*/*images*/')[0]
         model = init_model(img_path, model_config)
         model.load_state_dict(torch.load(glob.glob(MODEL_DIR + '/*model*')[0]))
         model.eval()
         # Evaluate on the training data
         print("Training Data evaluation")
-        _, t_acc = evaluate_dataset(train_data, model, step_size)
+        _, t_acc = evaluate_dataset(train_data, train_img, model, step_size)
         # Evaluate on the dev set
         print("Development Data evaluation")
-        _, d_acc = evaluate_dataset(dev_data, model, step_size)
+        _, d_acc = evaluate_dataset(dev_data, dev_img, model, step_size)
         print('Accuracy:\nTrain Data {}%, {} total samples\nDev Data {}%, {} total samples'.format(
             round(100*t_acc,2), len(train_data), round(100*d_acc,2), len(dev_data)))
     return
 
 def main(data_dir, model_dir, epochs=10, batch_size=10, learning_rate = 0.01, i_dropout=0.25, w_dropout=0.25, train_size=1000000, dev_size=1000000,
           word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5,
-          es_threshold = 0.01, model='model', sent_structure='default', vector_combine='concat', shuffle_options=True, save=False):
+          es_threshold = 0.01, model='model', vector_combine='concat', shuffle_options=True, save=False):
     train_data, dev_data, train_img, dev_img = pre.preprocessData(data_dir=data_dir, train_size=train_size, dev_size=dev_size, shuffle_options=shuffle_options)
     configureWandB(learning_rate=learning_rate, batch_size=batch_size, epochs=epochs, i_dropout=i_dropout, w_dropout=w_dropout, train_size=len(train_data),
                    dev_size=len(dev_data), word_linears=word_linears, word_activations=word_activations, out_linears=out_linears,
                    out_activations=out_activations, seed=seed, early_stop=early_stop, es_threshold=es_threshold, model=model,
-                   sent_structure=sent_structure, vector_combine=vector_combine, shuffle_options=shuffle_options)
+                   vector_combine=vector_combine, shuffle_options=shuffle_options)
     train(data_dir=data_dir, model_dir=model_dir, train_data=train_data, dev_data=dev_data, train_img=train_img, dev_img=dev_img, save=save)
     return
 
@@ -271,7 +294,6 @@ if __name__ == "__main__":
     train_parser.add_argument("--early_stop", type=int, default=100)
     train_parser.add_argument("--es_threshold", type=float, default=0.01)
     train_parser.add_argument("--model", type=str, default='mpnet_base_v2')
-    train_parser.add_argument("--sent_structure", type=str, default='word0 word1')
     train_parser.add_argument("--vector_combine", type=str, default='concat')
     train_parser.add_argument('--shuffle_options', action='store_true')
     train_parser.add_argument('--save', action='store_true')
@@ -284,9 +306,9 @@ if __name__ == "__main__":
     predict_parser.add_argument("--step_size", type=int, default=2)
     predict_parser.add_argument("--train_size", type=int, default=1000000)
     predict_parser.add_argument("--dev_size", type=int, default=1000000)
+    predict_parser.add_argument("--seed", type=int, default=22)
     args = parser.parse_args()
     kwargs = vars(args)
-    np.random.seed(kwargs['seed'])
     global DATA_DIR
     global MODEL_DIR
     DATA_DIR = kwargs['data_dir']

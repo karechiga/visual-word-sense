@@ -18,7 +18,9 @@ def readXData(data_dir):
         if len(row) < 10:
             continue
         row.pop(0)
-        rows.append(row)
+        imgs = row[-10:]
+        imgs.insert(0, ' '.join(row[:-10]))
+        rows.append(imgs)
     return rows
 
 def readYData(data_dir):
@@ -77,7 +79,7 @@ def getBatches(data, images, batch_size, rand = True, shuffle_options = True):
         answers = []
         for x in data[i:i+batch_size]:
             # Word input
-            words.append(x[0:2])
+            words.append(x[0])
             # Images input
             if shuffle_options:
                 imgs = np.random.choice([j for j in images if j != x[-1]],size=9,replace=False)
@@ -86,7 +88,7 @@ def getBatches(data, images, batch_size, rand = True, shuffle_options = True):
                 options.append(imgs)
             else:
                 # leave options unchanged from data input
-                options.append(x[2:-1])
+                options.append(x[1:-1])
             # output
             answers.append(x[-1])
         batch.append(words)
