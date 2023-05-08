@@ -260,6 +260,33 @@ def evaluate(data_dir, model_dir, test_dir, step_size, train_size, dev_size, see
             round(100*t_acc,2), len(train_data), round(100*d_acc,2), len(dev_data)))
     return
 
+def analysis(model_dir, data_dir):
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(7, 7))
+    ax = plt.subplot(111)
+    i = 0
+    for folder in os.listdir(model_dir):
+        try:
+            outputs = pd.read_csv(model_dir + f'/{folder}/outputs.csv', header=None, skipinitialspace = True, names=['Input',
+                                                            'Choice1', 'Probability1', 'Choice2', 'Probability2',
+                                                            'Choice3', 'Probability3', 'Choice4', 'Probability4',
+                                                            'Choice5', 'Probability5', 'Choice6', 'Probability6',
+                                                            'Choice7', 'Probability7', 'Choice8', 'Probability8',
+                                                            'Choice9', 'Probability9', 'Choice10', 'Probability10', 'Answer', 'Rank'])
+            accuracy = len(outputs[outputs['Rank']==1]) / len(outputs)
+            mrr = sum(1 / outputs['Rank']) / len(outputs['Rank'])
+            print(f'Model {folder}:\nAccuracy:\t{round(accuracy*100,2)}\nMRR:\t\t{round(mrr*100,2)}')
+            ax.hist(outputs['Rank'], bins=np.arange(1,12)-.8+i*0.2, rwidth=0.2, weights=np.ones(len(outputs['Rank'])) / len(outputs['Rank']), label=folder[[a.start() for a in re.finditer('_', folder)][-4]+1:] )
+            i+=1
+        except:
+            continue
+    ax.set_xlabel('Predicted Ranking of Correct Image')
+    ax.set_ylabel('Proportion of Test Data')
+    ax.set_xticks(ticks=[1,2,3,4,5,6,7,8,9,10])
+    ax.legend()
+    plt.savefig(model_dir + '/rank_histogram.png')
+
 def main(data_dir, model_dir, epochs=10, batch_size=10, learning_rate = 0.01, i_dropout=0.25, w_dropout=0.25, train_size=1000000, dev_size=1000000,
           word_linears = 2, word_activations = 'tanh', out_linears = 2, out_activations = 'relu', seed = 22, early_stop = 5,
           es_threshold = 0.01, model='model', vector_combine='concat', shuffle_options=True, save=False):
@@ -307,6 +334,12 @@ if __name__ == "__main__":
     predict_parser.add_argument("--train_size", type=int, default=1000000)
     predict_parser.add_argument("--dev_size", type=int, default=1000000)
     predict_parser.add_argument("--seed", type=int, default=22)
+    
+    analysis_parser = subparsers.add_parser("analysis")
+    analysis_parser.set_defaults(func=analysis)
+    analysis_parser.add_argument("model_dir")
+    analysis_parser.add_argument("data_dir")
+    
     args = parser.parse_args()
     kwargs = vars(args)
     global DATA_DIR
